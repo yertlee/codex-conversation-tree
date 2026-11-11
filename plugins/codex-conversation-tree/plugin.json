@@ -1,0 +1,24 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "codex-conversation-tree",
+  "version": "0.3.3",
+  "description": "Continue and fork Codex conversations in an interactive tree view.",
+  "author": { "name": "yertlee", "url": "https://github.com/yertlee" },
+  "repository": "https://github.com/yertlee/codex-conversation-tree",
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true,
+      "interface": {
+        "displayName": "Conversation Tree",
+        "shortDescription": "Explore and fork Codex chats",
+        "longDescription": "Browse local Codex chats as a tree of Turns, continue an existing chat, and fork from a completed Turn. Forks stay visible under their source Turn. Requires Codex desktop, Node.js, and the Codex CLI on PATH. This beta does not merge chats or provide session-to-session messaging.",
+        "developerName": "yertlee",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "logo": "./assets/icon.svg",
+        "composerIcon": "./assets/icon.svg"
+      }
+    }
+  }
+}
