@@ -37503,7 +37503,7 @@ var CodexClient = class extends EventEmitter {
     });
     this.child.stderr.on("data", (chunk) => process.stderr.write(chunk));
     this.ready = this.request("initialize", {
-      clientInfo: { name: "codex_conversation_tree", title: "Codex Conversation Tree", version: "0.3.3" }
+      clientInfo: { name: "codex_conversation_tree", title: "Codex Conversation Tree", version: "0.3.6" }
     }).then(() => this.send({ method: "initialized", params: {} }));
   }
   handleMessage(message) {
@@ -37597,10 +37597,16 @@ function projectTurns(threadId, turns) {
     id: turn.id,
     threadId,
     status: turn.status,
-    messages: (turn.items ?? []).filter((item) => item.type === "userMessage" || item.type === "agentMessage").map((item) => ({
-      role: item.type === "userMessage" ? "user" : "assistant",
-      text: typeof item.text === "string" ? item.text : Array.isArray(item.content) ? item.content.filter((part) => part.type === "text").map((part) => part.text).join("\n") : ""
-    })).filter((item) => item.text),
+    messages: (() => {
+      const visible = (turn.items ?? []).filter((item) => item.type === "userMessage" || item.type === "agentMessage").map((item) => ({
+        role: item.type === "userMessage" ? "user" : "assistant",
+        text: typeof item.text === "string" ? item.text : Array.isArray(item.content) ? item.content.filter((part) => part.type === "text").map((part) => part.text).join("\n") : ""
+      })).filter((item) => item.text);
+      return [
+        visible.filter((item) => item.role === "user").at(-1),
+        visible.filter((item) => item.role === "assistant").at(-1)
+      ].filter(Boolean);
+    })(),
     tools: (turn.items ?? []).filter((item) => ["commandExecution", "fileChange", "mcpToolCall", "webSearch"].includes(item.type)).map((item) => {
       if (item.type === "commandExecution") return `\u547D\u4EE4 \xB7 ${item.command || "\u8FD0\u884C\u547D\u4EE4"}`;
       if (item.type === "fileChange") return `\u6587\u4EF6\u4FEE\u6539 \xB7 ${(item.changes ?? []).map((change) => change.path).filter(Boolean).join("\u3001") || "\u67E5\u770B\u8BE6\u60C5"}`;
@@ -37614,7 +37620,7 @@ function projectTurns(threadId, turns) {
 var root = dirname(dirname(fileURLToPath(import.meta.url)));
 var uiUri = "ui://codex-conversation-tree/v4.html";
 var codex = new CodexClient();
-var server = new McpServer({ name: "codex-conversation-tree", version: "0.3.3" });
+var server = new McpServer({ name: "codex-conversation-tree", version: "0.3.6" });
 var reply = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value });
 var activities = /* @__PURE__ */ new Map();
 var approvals = /* @__PURE__ */ new Map();

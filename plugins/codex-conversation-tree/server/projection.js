@@ -3,13 +3,19 @@ export function projectTurns(threadId, turns) {
     id: turn.id,
     threadId,
     status: turn.status,
-    messages: (turn.items ?? [])
+    messages: (() => {
+      const visible = (turn.items ?? [])
       .filter(item => item.type === 'userMessage' || item.type === 'agentMessage')
       .map(item => ({
         role: item.type === 'userMessage' ? 'user' : 'assistant',
         text: typeof item.text === 'string' ? item.text :
           Array.isArray(item.content) ? item.content.filter(part => part.type === 'text').map(part => part.text).join('\n') : ''
-      })).filter(item => item.text),
+      })).filter(item => item.text);
+      return [
+        visible.filter(item => item.role === 'user').at(-1),
+        visible.filter(item => item.role === 'assistant').at(-1),
+      ].filter(Boolean);
+    })(),
     tools: (turn.items ?? [])
       .filter(item => ['commandExecution', 'fileChange', 'mcpToolCall', 'webSearch'].includes(item.type))
       .map(item => {

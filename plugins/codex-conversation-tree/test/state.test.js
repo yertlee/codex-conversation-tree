@@ -6,6 +6,19 @@ import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { CodexClient } from '../server/codex-client.js';
 import { readBranches, saveBranch } from '../server/branch-store.js';
+import { visibleMessages } from '../web/detail-model.js';
+
+test('detail view keeps only the readable conversation messages', () => {
+  assert.deepEqual(visibleMessages([
+    { role: 'user', text: '  问题  ' },
+    { role: 'assistant', text: '回答一' },
+    { role: 'assistant', text: '回答二' },
+    { role: 'tool', text: '内部数据' },
+  ]), [
+    { role: 'user', text: '问题' },
+    { role: 'assistant', text: '回答一\n\n回答二' },
+  ]);
+});
 
 test('fork anchor records survive reload and preserve separate children', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'codex-tree-'));

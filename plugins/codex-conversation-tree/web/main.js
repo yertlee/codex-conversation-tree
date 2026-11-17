@@ -1,5 +1,6 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import { treeRootId, projectForkTurns } from './tree-model.js';
+import { visibleMessages } from './detail-model.js';
 
 const app = new App({ name: 'codex-conversation-tree', version: '0.2.0' });
 const $ = id => document.getElementById(id);
@@ -74,8 +75,8 @@ function selectTurn(item,thread){
   $('shell').classList.add('has-detail');
   $('detail-title').textContent=item.question||'Turn 详情';
   const body=$('detail-body');body.replaceChildren();
-  for(const m of item.messages??[]){const block=el('section','detail-block');block.append(el('div','detail-role',m.role==='user'?'用户提问':'助手回答'),el('div','detail-text',m.text));body.append(block);}
-  if(item.tools?.length){const block=el('section','detail-block');block.append(el('div','detail-role','过程记录'));for(const tool of item.tools)block.append(el('div','detail-text',tool));body.append(block);}
+  const messages=visibleMessages(item.messages);
+  for(const m of messages){const block=el('section',`detail-message ${m.role}`);block.append(el('div','detail-role',m.role==='user'?'你':'助手'),el('div','detail-text',m.text));body.append(block);}
   if(state.mode==='demo'){
     const form=el('form','demo-form'),input=el('input'),button=el('button','btn primary','创建分支');
     input.placeholder='给分支起个名字';input.maxLength=48;input.required=true;button.type='submit';
@@ -145,14 +146,23 @@ async function pollActivity(){
       if(event.method==='item/agentMessage/delta'){
         const delta=event.params.delta||'';
         $('live-answer').hidden=false;$('live-answer').textContent+=delta;
-        if(run.live){run.live.answer=run.live.answer==='正在生成…'?delta:run.live.answer+delta;run.live.messages[1]={role:'assistant',text:run.live.answer};draw();}
+        if(run.live){
+          run.live.answer=run.live.answer==='正在生成…'?delta:run.live.answer+delta;
+          run.live.messages[1]={role:'assistant',text:run.live.answer};
+          if(state.selected?.id===run.live.id) selectTurn(run.live,threadById(run.threadId));
+          else draw();
+        }
       }
     }
     renderApproval(result.pending||[]);
     if(result.status!=='inProgress'&&result.status!=='unknown'){
       state.run=null;updateComposer();$('composer-status').textContent=result.status==='completed'?'已完成':`已结束：${result.status}`;
       if(result.status!=='completed')toast(`本轮状态：${result.status}`);
-      await refreshCatalog();await showReal(run.threadId);return;
+      await refreshCatalog();await showReal(run.threadId);
+      const updatedThread=threadById(run.threadId);
+      const finalTurn=updatedThread?.turns.at(-1);
+      if(finalTurn) selectTurn(finalTurn,updatedThread);
+      return;
     }
   }catch(error){$('composer-status').textContent=`状态读取失败：${error.message}`;}
   if(state.run===run)setTimeout(pollActivity,1200);
@@ -167,7 +177,9 @@ async function sendTurn(){
     const live=turn(result.turnId,text,'正在生成…','现在');live.status='进行中';
     const branch=threadById(threadId);if(branch)branch.turns.push(live);
     state.expanded.add(threadId);
-    state.run={threadId,turnId:result.turnId,seq:0,live};updateComposer();draw();requestAnimationFrame(readableView);pollActivity();
+    state.run={threadId,turnId:result.turnId,seq:0,live};
+    selectTurn(live,branch);
+    updateComposer();draw();requestAnimationFrame(readableView);pollActivity();
   }catch(error){$('composer-status').textContent=`发送失败：${error.message}`;$('send-turn').disabled=false;}
 }
 async function showReal(id){

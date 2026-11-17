@@ -1,15 +1,17 @@
 # Conversation Tree for Codex
 
-Version 0.3.3 provides conversation controls in a separate, full-page Codex plugin view. It does not replace Codex's built-in chat page.
+Version 0.3.6 provides conversation controls in a separate, full-page Codex plugin view. It does not replace Codex's built-in chat page.
 
 ## Tree view
 
 - One card represents one completed Turn, with the user question and assistant answer summarized on the card.
 - The main conversation runs downward. Forked conversations branch to the right, including nested branches.
 - Click a card to read its full messages and a short list of tool actions in the detail pane.
+- Turn details show the user message and final assistant answer. Intermediate progress messages and tool output are omitted from the conversation body.
 - Expand branches individually, collapse or expand all, pan, zoom, and fit the tree to the viewport.
 - Browse local Codex conversations from the sidebar. The last selected conversation is restored when the page opens again.
 - Select a real conversation and send a new message from the page composer. The message is sent to the selected existing thread ID.
+- While a message is running, the new Turn is selected in the tree and its streamed answer is reflected in the detail pane.
 - Fork a real conversation from a completed Turn. The plugin stores the child thread's source Turn in the user's Codex data directory.
 - Forks stay attached to the original tree even when Codex lists them as separate root sessions. Empty forks appear immediately at their source Turn, and an active Turn appears before its answer finishes.
 - Watch the active Turn and respond to command, file-change, or permission requests in the page. The page also provides a stop control.

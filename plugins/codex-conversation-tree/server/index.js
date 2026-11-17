@@ -13,7 +13,7 @@ import { projectTurns } from './projection.js';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const uiUri = 'ui://codex-conversation-tree/v4.html';
 const codex = new CodexClient();
-const server = new McpServer({ name: 'codex-conversation-tree', version: '0.3.3' });
+const server = new McpServer({ name: 'codex-conversation-tree', version: '0.3.6' });
 const reply = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value });
 const activities = new Map();
 const approvals = new Map();

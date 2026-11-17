@@ -23771,6 +23771,22 @@ function projectForkTurns(parentTurns, childTurns, savedAnchor) {
   return { anchorId, turns, inherited: childTurns.length - turns.length };
 }
 
+// web/detail-model.js
+function visibleMessages(messages = []) {
+  const result = [];
+  for (const message of messages) {
+    if (!message || !["user", "assistant"].includes(message.role)) continue;
+    const text = String(message.text ?? "").trim();
+    if (!text) continue;
+    const previous = result[result.length - 1];
+    if (previous?.role === message.role) previous.text += `
+
+${text}`;
+    else result.push({ role: message.role, text });
+  }
+  return result;
+}
+
 // web/main.js
 var app = new i({ name: "codex-conversation-tree", version: "0.2.0" });
 var $ = (id) => document.getElementById(id);
@@ -23999,15 +24015,10 @@ function selectTurn(item, thread) {
   $("detail-title").textContent = item.question || "Turn \u8BE6\u60C5";
   const body = $("detail-body");
   body.replaceChildren();
-  for (const m of item.messages ?? []) {
-    const block = el("section", "detail-block");
-    block.append(el("div", "detail-role", m.role === "user" ? "\u7528\u6237\u63D0\u95EE" : "\u52A9\u624B\u56DE\u7B54"), el("div", "detail-text", m.text));
-    body.append(block);
-  }
-  if (item.tools?.length) {
-    const block = el("section", "detail-block");
-    block.append(el("div", "detail-role", "\u8FC7\u7A0B\u8BB0\u5F55"));
-    for (const tool of item.tools) block.append(el("div", "detail-text", tool));
+  const messages = visibleMessages(item.messages);
+  for (const m of messages) {
+    const block = el("section", `detail-message ${m.role}`);
+    block.append(el("div", "detail-role", m.role === "user" ? "\u4F60" : "\u52A9\u624B"), el("div", "detail-text", m.text));
     body.append(block);
   }
   if (state.mode === "demo") {
@@ -24151,7 +24162,8 @@ async function pollActivity() {
         if (run.live) {
           run.live.answer = run.live.answer === "\u6B63\u5728\u751F\u6210\u2026" ? delta : run.live.answer + delta;
           run.live.messages[1] = { role: "assistant", text: run.live.answer };
-          draw();
+          if (state.selected?.id === run.live.id) selectTurn(run.live, threadById(run.threadId));
+          else draw();
         }
       }
     }
@@ -24163,6 +24175,9 @@ async function pollActivity() {
       if (result.status !== "completed") toast(`\u672C\u8F6E\u72B6\u6001\uFF1A${result.status}`);
       await refreshCatalog();
       await showReal(run.threadId);
+      const updatedThread = threadById(run.threadId);
+      const finalTurn = updatedThread?.turns.at(-1);
+      if (finalTurn) selectTurn(finalTurn, updatedThread);
       return;
     }
   } catch (error62) {
@@ -24188,6 +24203,7 @@ async function sendTurn() {
     if (branch) branch.turns.push(live);
     state.expanded.add(threadId);
     state.run = { threadId, turnId: result.turnId, seq: 0, live };
+    selectTurn(live, branch);
     updateComposer();
     draw();
     requestAnimationFrame(readableView);

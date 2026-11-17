@@ -14,6 +14,7 @@ test('project completed Codex turns into readable messages', () => {
   const turns = projectTurns('thread-1', [
     { id: 'turn-1', status: 'completed', items: [
       { type: 'userMessage', content: [{ type: 'text', text: '你好' }] },
+      { type: 'agentMessage', text: '中间过程' },
       { type: 'agentMessage', text: '你好！' },
       { type: 'commandExecution', command: 'pwd' },
       { type: 'reasoning', content: [{ type: 'text', text: 'hidden' }] }
