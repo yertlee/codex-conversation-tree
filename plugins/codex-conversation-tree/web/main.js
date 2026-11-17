@@ -4,7 +4,7 @@ import { visibleMessages, appendAgentDelta } from './detail-model.js';
 import { renderMarkdown } from './message-renderer.js';
 import { searchTurns, expandToTurn, centerTurn, treeViewStorageKey, serializeTreeView, restoreTreeView } from './tree-navigation.js';
 
-const app = new App({ name: 'codex-conversation-tree', version: '0.3.7' });
+const app = new App({ name: 'codex-conversation-tree', version: '0.3.8' });
 const $ = id => document.getElementById(id);
 const CARD_W = 286, CARD_H = 146, ROW_GAP = 38, COL_GAP = 150, PILL_H = 36;
 const demo = {
@@ -219,8 +219,6 @@ async function pollActivity(){
     if(state.mode==='real'&&state.selectedThreadId===run.threadId)renderApproval(result.pending||[]);
     else renderApproval([]);
     if(result.status!=='inProgress'&&result.status!=='unknown'){
-      state.run=null;updateComposer();
-      if(state.mode==='real'&&state.selectedThreadId===run.threadId)$('composer-status').textContent=result.status==='completed'?'已完成':`已结束：${result.status}`;
       if(result.status!=='completed')toast(`本轮状态：${result.status}`);
       let finalTurns;
       try{finalTurns=await readTurns(run.threadId);}catch(error){toast(`本轮已结束，但读取最终回答失败：${error.message}`);}
@@ -244,6 +242,8 @@ async function pollActivity(){
         }
       }
       $('live-answer').hidden=true;
+      state.run=null;updateComposer();
+      if(state.mode==='real'&&state.selectedThreadId===run.threadId)$('composer-status').textContent=result.status==='completed'?'已完成':`已结束：${result.status}`;
       return;
     }
   }catch(error){$('composer-status').textContent=`状态读取失败：${error.message}`;}

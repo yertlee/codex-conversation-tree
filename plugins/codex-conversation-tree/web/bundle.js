@@ -24032,7 +24032,7 @@ function restoreTreeView(raw, source) {
 }
 
 // web/main.js
-var app = new i({ name: "codex-conversation-tree", version: "0.3.7" });
+var app = new i({ name: "codex-conversation-tree", version: "0.3.8" });
 var $ = (id) => document.getElementById(id);
 var CARD_W = 286;
 var CARD_H = 146;
@@ -24514,9 +24514,6 @@ async function pollActivity() {
     if (state.mode === "real" && state.selectedThreadId === run.threadId) renderApproval(result.pending || []);
     else renderApproval([]);
     if (result.status !== "inProgress" && result.status !== "unknown") {
-      state.run = null;
-      updateComposer();
-      if (state.mode === "real" && state.selectedThreadId === run.threadId) $("composer-status").textContent = result.status === "completed" ? "\u5DF2\u5B8C\u6210" : `\u5DF2\u7ED3\u675F\uFF1A${result.status}`;
       if (result.status !== "completed") toast(`\u672C\u8F6E\u72B6\u6001\uFF1A${result.status}`);
       let finalTurns;
       try {
@@ -24549,6 +24546,9 @@ async function pollActivity() {
         }
       }
       $("live-answer").hidden = true;
+      state.run = null;
+      updateComposer();
+      if (state.mode === "real" && state.selectedThreadId === run.threadId) $("composer-status").textContent = result.status === "completed" ? "\u5DF2\u5B8C\u6210" : `\u5DF2\u7ED3\u675F\uFF1A${result.status}`;
       return;
     }
   } catch (error62) {

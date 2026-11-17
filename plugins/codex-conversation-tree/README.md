@@ -1,6 +1,6 @@
 # Conversation Tree for Codex
 
-Version 0.3.7 provides conversation controls in a separate, full-page Codex plugin view. It does not replace Codex's built-in chat page.
+Version 0.3.8 provides conversation controls in a separate, full-page Codex plugin view. It does not replace Codex's built-in chat page.
 
 ## Tree view
 

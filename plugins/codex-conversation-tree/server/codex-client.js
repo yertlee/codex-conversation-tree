@@ -23,7 +23,7 @@ export class CodexClient extends EventEmitter {
     });
     this.child.stderr.on('data', chunk => process.stderr.write(chunk));
     this.ready = this.request('initialize', {
-      clientInfo: { name: 'codex_conversation_tree', title: 'Codex Conversation Tree', version: '0.3.7' }
+      clientInfo: { name: 'codex_conversation_tree', title: 'Codex Conversation Tree', version: '0.3.8' }
     }).then(() => this.send({ method: 'initialized', params: {} }));
   }
 

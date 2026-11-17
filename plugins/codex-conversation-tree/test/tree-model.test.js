@@ -41,3 +41,14 @@ test('an empty fork appears at its source Turn without repeating inherited cards
   assert.equal(compacted.anchorId, 't3');
   assert.deepEqual(compacted.turns, []);
 });
+
+test('continuing a parent branch keeps its nested child attached to the original Turn', () => {
+  const root = [{ id: 'r1' }, { id: 'r2' }];
+  const branch = [...root, { id: 'b1' }, { id: 'b2' }];
+  const nested = [...root, { id: 'b1' }, { id: 'n1' }];
+  const parentView = projectForkTurns(root, branch, 'r2');
+  const nestedView = projectForkTurns(branch, nested, 'b1');
+  assert.deepEqual(parentView.turns.map(turn => turn.id), ['b1', 'b2']);
+  assert.equal(nestedView.anchorId, 'b1');
+  assert.deepEqual(nestedView.turns.map(turn => turn.id), ['n1']);
+});

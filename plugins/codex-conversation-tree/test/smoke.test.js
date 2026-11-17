@@ -36,7 +36,7 @@ test('MCP tools and UI resource connect to the local Codex app-server', async ()
       'continue_conversation', 'fork_conversation_at_turn', 'get_conversation_tree',
       'get_turn_activity', 'interrupt_turn', 'list_conversations', 'respond_to_approval'
     ]);
-    const resource = await client.readResource({ uri: 'ui://codex-conversation-tree/v5.html' });
+    const resource = await client.readResource({ uri: 'ui://codex-conversation-tree/v6.html' });
     assert.match(resource.contents[0].text, /Conversation Tree/);
     const html = resource.contents[0].text;
     assert.equal((html.match(/<!doctype html>/gi) ?? []).length, 1);
