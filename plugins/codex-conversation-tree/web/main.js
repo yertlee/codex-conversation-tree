@@ -4,7 +4,7 @@ import { visibleMessages, appendAgentDelta } from './detail-model.js';
 import { renderMarkdown } from './message-renderer.js';
 import { searchTurns, expandToTurn, centerTurn, treeViewStorageKey, serializeTreeView, restoreTreeView } from './tree-navigation.js';
 
-const app = new App({ name: 'codex-conversation-tree', version: '0.3.8' });
+const app = new App({ name: 'codex-conversation-tree', version: '0.3.9' });
 const $ = id => document.getElementById(id);
 const CARD_W = 286, CARD_H = 146, ROW_GAP = 38, COL_GAP = 150, PILL_H = 36;
 const demo = {
@@ -32,7 +32,7 @@ const demo = {
   ]
 };
 function turn(id, question, answer, time) { return { id, question, answer, time, status:'已完成', messages:[{role:'user',text:question},{role:'assistant',text:answer}], tools:[] }; }
-const state = { mode:'demo', source:null, catalog:[], branches:{}, selectedThreadId:null, expanded:new Set(), selected:null, run:null, scale:1, panX:0, panY:0, bounds:{width:0,height:0}, dragging:null, request:0, searchMatches:[], searchIndex:-1 };
+const state = { mode:'demo', source:null, catalog:[], branches:{}, models:[], selectedThreadId:null, expanded:new Set(), selected:null, run:null, scale:1, panX:0, panY:0, bounds:{width:0,height:0}, dragging:null, request:0, searchMatches:[], searchIndex:-1 };
 function el(tag, cls, label) { const node=document.createElement(tag); if(cls) node.className=cls; if(label!==undefined) node.textContent=label; return node; }
 function toast(message) { const box=$('toast'); box.textContent=message; box.hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(()=>box.hidden=true,2800); }
 function saved(key) { try { return localStorage.getItem(key); } catch { return null; } }
@@ -157,6 +157,23 @@ async function refreshCatalog(){
   const result=await call('list_conversations',{limit:100});
   state.catalog=result.threads||[];state.branches=result.branches||{};renderCatalog();
 }
+function updateEffortOptions(){
+  const model=state.models.find(item=>item.id===$('model-select').value);
+  const effort=$('effort-select'),previous=effort.value;effort.replaceChildren();
+  const defaultOption=el('option','','默认强度');defaultOption.value='';effort.append(defaultOption);effort.disabled=!model;
+  for(const level of model?.efforts||[]){const option=el('option','',level);option.value=level;effort.append(option);}
+  effort.value=model?.efforts.includes(previous)?previous:'';
+}
+async function loadModels(){
+  const result=await call('list_models',{});state.models=result.models||[];
+  const select=$('model-select');select.replaceChildren();
+  const follow=el('option','','跟随会话模型');follow.value='';select.append(follow);
+  for(const model of state.models){const option=el('option','',model.name||model.id);option.value=model.id;select.append(option);}
+  select.value=state.models.some(model=>model.id===saved('tree-model'))?saved('tree-model'):'';
+  updateEffortOptions();
+  const effort=saved('tree-effort');if([...$('effort-select').options].some(option=>option.value===effort))$('effort-select').value=effort;
+  select.disabled=false;
+}
 async function forkTurn(threadId,turnId){
   const button=Array.from($('detail-body').querySelectorAll('button')).find(b=>b.textContent==='从这个 Turn 分支');
   if(button)button.disabled=true;
@@ -199,6 +216,7 @@ async function pollActivity(){
     const result=await call('get_turn_activity',{threadId:run.threadId,turnId:run.turnId,afterSeq:run.seq});
     if(state.run!==run)return;
     run.seq=result.seq;
+    let answerChanged=false;
     for(const event of result.events){
       if(event.method==='item/agentMessage/delta'){
         const delta=event.params.delta||'';
@@ -206,15 +224,16 @@ async function pollActivity(){
           run.message=appendAgentDelta(run.message,event.params.itemId,delta);
           run.live.answer=run.message.text;
           run.live.messages[1]={role:'assistant',text:run.live.answer};
+          answerChanged=true;
           if(state.mode==='real'&&state.selectedThreadId===run.threadId){
             $('live-answer').hidden=false;$('live-answer').textContent=run.live.answer;
           }
-          if(state.mode==='real'&&threadById(run.threadId)){
-            if(state.selected?.id===run.live.id)selectTurn(run.live,threadById(run.threadId),{reframe:false});
-            else draw();
-          }
         }
       }
+    }
+    if(answerChanged&&state.mode==='real'&&threadById(run.threadId)){
+      if(state.selected?.id===run.live.id)selectTurn(run.live,threadById(run.threadId),{reframe:false});
+      else draw();
     }
     if(state.mode==='real'&&state.selectedThreadId===run.threadId)renderApproval(result.pending||[]);
     else renderApproval([]);
@@ -247,14 +266,15 @@ async function pollActivity(){
       return;
     }
   }catch(error){$('composer-status').textContent=`状态读取失败：${error.message}`;}
-  if(state.run===run)setTimeout(pollActivity,1200);
+  if(state.run===run)setTimeout(pollActivity,350);
 }
 async function sendTurn(){
   if(state.run||state.mode!=='real'||!state.selectedThreadId)return;
   const input=$('composer-input'),text=input.value.trim();if(!text)return;
   const threadId=state.selectedThreadId;$('send-turn').disabled=true;$('composer-status').textContent='正在发送…';
   try{
-    const result=await call('continue_conversation',{threadId,text});
+    const model=$('model-select').value,effort=$('effort-select').value;
+    const result=await call('continue_conversation',{threadId,text,...model?{model}:{},...effort?{effort}:{}});
     input.value='';$('live-answer').textContent='';$('live-answer').hidden=true;
     const live=turn(result.turnId,text,'正在生成…','现在');live.status='进行中';
     const branch=threadById(threadId);if(branch)branch.turns.push(live);
@@ -296,9 +316,13 @@ async function showReal(id){
     updateComposer();if(unresolved)toast('部分分支来源未知，仍可从左侧选择会话');
   }catch(error){if(request!==state.request)return;$('empty').hidden=false;$('empty').textContent=`读取失败：${error.message}`;toast('真实会话读取失败');}
 }
-function setup(){ installTreeSearch();$('show-demo').onclick=showDemo;$('show-real').onclick=()=>{const first=state.catalog.find(t=>!t.forkedFromId)||state.catalog[0];if(first)showReal(first.id);else toast('没有可读取的本地会话');};$('session-search').oninput=renderCatalog;$('close-detail').onclick=()=>{$('shell').classList.remove('has-detail');state.selected=null;draw();};$('collapse-all').onclick=()=>{state.expanded.clear();draw();fit();};$('expand-all').onclick=()=>{state.expanded=new Set(state.source?.threads.filter(t=>t.id!==state.source.root).map(t=>t.id)||[]);draw();fit();};$('zoom-in').onclick=()=>setZoom(state.scale*1.2);$('zoom-out').onclick=()=>setZoom(state.scale/1.2);$('fit-view').onclick=fit;
+function setupModelControls(){
+  $('model-select').onchange=()=>{save('tree-model',$('model-select').value);updateEffortOptions();save('tree-effort','');};
+  $('effort-select').onchange=()=>save('tree-effort',$('effort-select').value);
+}
+function setup(){ installTreeSearch();setupModelControls();$('show-demo').onclick=showDemo;$('show-real').onclick=()=>{const first=state.catalog.find(t=>!t.forkedFromId)||state.catalog[0];if(first)showReal(first.id);else toast('没有可读取的本地会话');};$('session-search').oninput=renderCatalog;$('close-detail').onclick=()=>{$('shell').classList.remove('has-detail');state.selected=null;draw();};$('collapse-all').onclick=()=>{state.expanded.clear();draw();fit();};$('expand-all').onclick=()=>{state.expanded=new Set(state.source?.threads.filter(t=>t.id!==state.source.root).map(t=>t.id)||[]);draw();fit();};$('zoom-in').onclick=()=>setZoom(state.scale*1.2);$('zoom-out').onclick=()=>setZoom(state.scale/1.2);$('fit-view').onclick=fit;
   $('composer-form').onsubmit=e=>{e.preventDefault();sendTurn();};
   $('stop-turn').onclick=async()=>{const run=state.run;if(!run)return;try{await call('interrupt_turn',{threadId:run.threadId,turnId:run.turnId});$('composer-status').textContent='正在停止…';}catch(error){toast(error.message);}};
   const view=$('viewport');view.addEventListener('contextmenu',e=>e.preventDefault());view.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;state.dragging={x:e.clientX,y:e.clientY,px:state.panX,py:state.panY};view.setPointerCapture(e.pointerId);view.classList.add('dragging');});view.addEventListener('pointermove',e=>{if(!state.dragging)return;state.panX=state.dragging.px+e.clientX-state.dragging.x;state.panY=state.dragging.py+e.clientY-state.dragging.y;applyTransform();});view.addEventListener('pointerup',()=>{state.dragging=null;view.classList.remove('dragging');saveView();});view.addEventListener('pointercancel',()=>{state.dragging=null;view.classList.remove('dragging');saveView();});view.addEventListener('wheel',e=>{e.preventDefault();const r=view.getBoundingClientRect();setZoom(state.scale*(e.deltaY>0?.9:1.1),{x:e.clientX-r.left,y:e.clientY-r.top});},{passive:false});window.addEventListener('resize',()=>{if(state.source)fit();});}
-async function start(){setup();showDemo();if(new URLSearchParams(location.search).has('preview'))return;try{await app.connect();await refreshCatalog();const previous=saved('tree-selection');if(previous&&previous!=='demo'&&state.catalog.some(t=>t.id===previous))await showReal(previous);}catch(error){$('sidebar-footer').textContent='本地会话暂时不可用';toast(error.message);}}
+async function start(){setup();showDemo();if(new URLSearchParams(location.search).has('preview'))return;try{await app.connect();await Promise.all([refreshCatalog(),loadModels().catch(error=>{$('model-select').title=`模型列表读取失败：${error.message}`;})]);const previous=saved('tree-selection');if(previous&&previous!=='demo'&&state.catalog.some(t=>t.id===previous))await showReal(previous);}catch(error){$('sidebar-footer').textContent='本地会话暂时不可用';toast(error.message);}}
 await start();

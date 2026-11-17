@@ -11,9 +11,9 @@ import { completeCatalog } from './catalog.js';
 import { projectTurns } from './projection.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const uiUri = 'ui://codex-conversation-tree/v6.html';
+const uiUri = 'ui://codex-conversation-tree/v7.html';
 const codex = new CodexClient();
-const server = new McpServer({ name: 'codex-conversation-tree', version: '0.3.8' });
+const server = new McpServer({ name: 'codex-conversation-tree', version: '0.3.9' });
 const reply = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value });
 const activities = new Map();
 const approvals = new Map();
@@ -65,6 +65,21 @@ registerAppTool(server, 'list_conversations', {
   return reply({ threads, nextCursor: result.nextCursor ?? null, branches });
 });
 
+registerAppTool(server, 'list_models', {
+  title: 'List available Codex models',
+  description: 'List models and reasoning levels available to the current Codex account.',
+  inputSchema: {},
+  _meta: {},
+  annotations: { readOnlyHint: true }
+}, async () => {
+  const result = await codex.call('model/list', { limit: 100 });
+  return reply({ models: (result.data ?? []).filter(model => !model.hidden).map(model => ({
+    id: model.model, name: model.displayName, isDefault: model.isDefault,
+    defaultEffort: model.defaultReasoningEffort,
+    efforts: (model.supportedReasoningEfforts ?? []).map(option => option.reasoningEffort)
+  })) });
+});
+
 registerAppTool(server, 'get_conversation_tree', {
   title: 'Read a conversation tree',
   description: 'Read completed turns from one Codex conversation, including its parent fork identity.',
@@ -107,12 +122,12 @@ registerAppTool(server, 'fork_conversation_at_turn', {
 registerAppTool(server, 'continue_conversation', {
   title: 'Continue Codex conversation',
   description: 'Append a new user Turn to the selected existing Codex conversation.',
-  inputSchema: { threadId: z.string().min(1), text: z.string().trim().min(1) },
+  inputSchema: { threadId: z.string().min(1), text: z.string().trim().min(1), model: z.string().min(1).optional(), effort: z.string().min(1).optional() },
   _meta: {},
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
-}, async ({ threadId, text }) => {
+}, async ({ threadId, text, model, effort }) => {
   await codex.call('thread/resume', { threadId, excludeTurns: true });
-  const result = await codex.call('turn/start', { threadId, input: [{ type: 'text', text }] });
+  const result = await codex.call('turn/start', { threadId, input: [{ type: 'text', text }], ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
   activity(threadId, result.turn.id);
   return reply({ threadId, turnId: result.turn.id, status: result.turn.status });
 });

@@ -24032,7 +24032,7 @@ function restoreTreeView(raw, source) {
 }
 
 // web/main.js
-var app = new i({ name: "codex-conversation-tree", version: "0.3.8" });
+var app = new i({ name: "codex-conversation-tree", version: "0.3.9" });
 var $ = (id) => document.getElementById(id);
 var CARD_W = 286;
 var CARD_H = 146;
@@ -24067,7 +24067,7 @@ var demo = {
 function turn(id, question, answer, time3) {
   return { id, question, answer, time: time3, status: "\u5DF2\u5B8C\u6210", messages: [{ role: "user", text: question }, { role: "assistant", text: answer }], tools: [] };
 }
-var state = { mode: "demo", source: null, catalog: [], branches: {}, selectedThreadId: null, expanded: /* @__PURE__ */ new Set(), selected: null, run: null, scale: 1, panX: 0, panY: 0, bounds: { width: 0, height: 0 }, dragging: null, request: 0, searchMatches: [], searchIndex: -1 };
+var state = { mode: "demo", source: null, catalog: [], branches: {}, models: [], selectedThreadId: null, expanded: /* @__PURE__ */ new Set(), selected: null, run: null, scale: 1, panX: 0, panY: 0, bounds: { width: 0, height: 0 }, dragging: null, request: 0, searchMatches: [], searchIndex: -1 };
 function el(tag, cls, label) {
   const node2 = document.createElement(tag);
   if (cls) node2.className = cls;
@@ -24430,6 +24430,40 @@ async function refreshCatalog() {
   state.branches = result.branches || {};
   renderCatalog();
 }
+function updateEffortOptions() {
+  const model = state.models.find((item) => item.id === $("model-select").value);
+  const effort = $("effort-select"), previous = effort.value;
+  effort.replaceChildren();
+  const defaultOption = el("option", "", "\u9ED8\u8BA4\u5F3A\u5EA6");
+  defaultOption.value = "";
+  effort.append(defaultOption);
+  effort.disabled = !model;
+  for (const level of model?.efforts || []) {
+    const option = el("option", "", level);
+    option.value = level;
+    effort.append(option);
+  }
+  effort.value = model?.efforts.includes(previous) ? previous : "";
+}
+async function loadModels() {
+  const result = await call("list_models", {});
+  state.models = result.models || [];
+  const select = $("model-select");
+  select.replaceChildren();
+  const follow = el("option", "", "\u8DDF\u968F\u4F1A\u8BDD\u6A21\u578B");
+  follow.value = "";
+  select.append(follow);
+  for (const model of state.models) {
+    const option = el("option", "", model.name || model.id);
+    option.value = model.id;
+    select.append(option);
+  }
+  select.value = state.models.some((model) => model.id === saved("tree-model")) ? saved("tree-model") : "";
+  updateEffortOptions();
+  const effort = saved("tree-effort");
+  if ([...$("effort-select").options].some((option) => option.value === effort)) $("effort-select").value = effort;
+  select.disabled = false;
+}
 async function forkTurn(threadId, turnId) {
   const button = Array.from($("detail-body").querySelectorAll("button")).find((b2) => b2.textContent === "\u4ECE\u8FD9\u4E2A Turn \u5206\u652F");
   if (button) button.disabled = true;
@@ -24493,6 +24527,7 @@ async function pollActivity() {
     const result = await call("get_turn_activity", { threadId: run.threadId, turnId: run.turnId, afterSeq: run.seq });
     if (state.run !== run) return;
     run.seq = result.seq;
+    let answerChanged = false;
     for (const event of result.events) {
       if (event.method === "item/agentMessage/delta") {
         const delta = event.params.delta || "";
@@ -24500,16 +24535,17 @@ async function pollActivity() {
           run.message = appendAgentDelta(run.message, event.params.itemId, delta);
           run.live.answer = run.message.text;
           run.live.messages[1] = { role: "assistant", text: run.live.answer };
+          answerChanged = true;
           if (state.mode === "real" && state.selectedThreadId === run.threadId) {
             $("live-answer").hidden = false;
             $("live-answer").textContent = run.live.answer;
           }
-          if (state.mode === "real" && threadById(run.threadId)) {
-            if (state.selected?.id === run.live.id) selectTurn(run.live, threadById(run.threadId), { reframe: false });
-            else draw();
-          }
         }
       }
+    }
+    if (answerChanged && state.mode === "real" && threadById(run.threadId)) {
+      if (state.selected?.id === run.live.id) selectTurn(run.live, threadById(run.threadId), { reframe: false });
+      else draw();
     }
     if (state.mode === "real" && state.selectedThreadId === run.threadId) renderApproval(result.pending || []);
     else renderApproval([]);
@@ -24554,7 +24590,7 @@ async function pollActivity() {
   } catch (error62) {
     $("composer-status").textContent = `\u72B6\u6001\u8BFB\u53D6\u5931\u8D25\uFF1A${error62.message}`;
   }
-  if (state.run === run) setTimeout(pollActivity, 1200);
+  if (state.run === run) setTimeout(pollActivity, 350);
 }
 async function sendTurn() {
   if (state.run || state.mode !== "real" || !state.selectedThreadId) return;
@@ -24564,7 +24600,8 @@ async function sendTurn() {
   $("send-turn").disabled = true;
   $("composer-status").textContent = "\u6B63\u5728\u53D1\u9001\u2026";
   try {
-    const result = await call("continue_conversation", { threadId, text });
+    const model = $("model-select").value, effort = $("effort-select").value;
+    const result = await call("continue_conversation", { threadId, text, ...model ? { model } : {}, ...effort ? { effort } : {} });
     input2.value = "";
     $("live-answer").textContent = "";
     $("live-answer").hidden = true;
@@ -24648,8 +24685,17 @@ async function showReal(id) {
     toast("\u771F\u5B9E\u4F1A\u8BDD\u8BFB\u53D6\u5931\u8D25");
   }
 }
+function setupModelControls() {
+  $("model-select").onchange = () => {
+    save("tree-model", $("model-select").value);
+    updateEffortOptions();
+    save("tree-effort", "");
+  };
+  $("effort-select").onchange = () => save("tree-effort", $("effort-select").value);
+}
 function setup() {
   installTreeSearch();
+  setupModelControls();
   $("show-demo").onclick = showDemo;
   $("show-real").onclick = () => {
     const first = state.catalog.find((t) => !t.forkedFromId) || state.catalog[0];
@@ -24728,7 +24774,9 @@ async function start() {
   if (new URLSearchParams(location.search).has("preview")) return;
   try {
     await app.connect();
-    await refreshCatalog();
+    await Promise.all([refreshCatalog(), loadModels().catch((error62) => {
+      $("model-select").title = `\u6A21\u578B\u5217\u8868\u8BFB\u53D6\u5931\u8D25\uFF1A${error62.message}`;
+    })]);
     const previous = saved("tree-selection");
     if (previous && previous !== "demo" && state.catalog.some((t) => t.id === previous)) await showReal(previous);
   } catch (error62) {

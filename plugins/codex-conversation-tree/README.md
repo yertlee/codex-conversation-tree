@@ -1,6 +1,6 @@
 # Conversation Tree for Codex
 
-Version 0.3.8 provides conversation controls in a separate, full-page Codex plugin view. It does not replace Codex's built-in chat page.
+Version 0.3.9 provides conversation controls in a separate, full-page Codex plugin view. It does not replace Codex's built-in chat page.
 
 ## Tree view
 
@@ -12,7 +12,9 @@ Version 0.3.8 provides conversation controls in a separate, full-page Codex plug
 - Browse local Codex conversations from the sidebar. The last selected conversation and each tree's view position and expanded branches are restored when the page opens again.
 - Search the current tree's questions and answers, reveal the matching branch, and jump between matches.
 - Select a real conversation and send a new message from the page composer. Selecting a historical Turn only opens its detail; use **Continue this conversation** in the detail pane to change the composer target explicitly. A new message always appends to that conversation's latest Turn.
+- Choose a model and reasoning effort for the next Turn, or leave the model set to **Follow conversation model**. Available choices come from Codex's `model/list` response. The choice is saved on this device.
 - While a message is running, the new Turn is selected in the tree and its streamed answer is reflected in the detail pane.
+- Streamed answer updates are checked about every 350 ms. This reduces display lag; model generation time still depends on the selected model and task.
 - Fork a real conversation from a completed Turn. The plugin stores the child thread's source Turn in the user's Codex data directory.
 - Forks stay attached to the original tree even when Codex lists them as separate root sessions. Empty forks appear immediately at their source Turn, and an active Turn appears before its answer finishes.
 - Watch the active Turn and respond to command, file-change, or permission requests in the page. The page also provides a stop control.

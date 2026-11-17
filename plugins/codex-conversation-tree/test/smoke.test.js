@@ -34,15 +34,20 @@ test('MCP tools and UI resource connect to the local Codex app-server', async ()
     const tools = await client.listTools();
     assert.deepEqual(tools.tools.map(tool => tool.name).sort(), [
       'continue_conversation', 'fork_conversation_at_turn', 'get_conversation_tree',
-      'get_turn_activity', 'interrupt_turn', 'list_conversations', 'respond_to_approval'
+      'get_turn_activity', 'interrupt_turn', 'list_conversations', 'list_models', 'respond_to_approval'
     ]);
-    const resource = await client.readResource({ uri: 'ui://codex-conversation-tree/v6.html' });
+    const resource = await client.readResource({ uri: 'ui://codex-conversation-tree/v7.html' });
     assert.match(resource.contents[0].text, /Conversation Tree/);
     const html = resource.contents[0].text;
     assert.equal((html.match(/<!doctype html>/gi) ?? []).length, 1);
     const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)?.[1];
     assert.ok(script);
     await transform(script, { loader: 'js', format: 'esm', target: 'es2022' });
+    const models = await client.callTool({ name: 'list_models', arguments: {} });
+    assert.equal(models.isError, undefined);
+    assert.ok(Array.isArray(models.structuredContent.models));
+    assert.ok(models.structuredContent.models.every(model =>
+      typeof model.id === 'string' && Array.isArray(model.efforts)));
     const listed = await client.callTool({ name: 'list_conversations', arguments: { limit: 1 } });
     assert.equal(listed.isError, undefined);
     assert.ok(Array.isArray(listed.structuredContent.threads));

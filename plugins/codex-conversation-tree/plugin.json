@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "codex-conversation-tree",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Continue and fork Codex conversations in an interactive tree view.",
   "author": { "name": "yertlee", "url": "https://github.com/yertlee" },
   "repository": "https://github.com/yertlee/codex-conversation-tree",

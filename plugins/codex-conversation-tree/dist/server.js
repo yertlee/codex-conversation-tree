@@ -37503,7 +37503,7 @@ var CodexClient = class extends EventEmitter {
     });
     this.child.stderr.on("data", (chunk) => process.stderr.write(chunk));
     this.ready = this.request("initialize", {
-      clientInfo: { name: "codex_conversation_tree", title: "Codex Conversation Tree", version: "0.3.8" }
+      clientInfo: { name: "codex_conversation_tree", title: "Codex Conversation Tree", version: "0.3.9" }
     }).then(() => this.send({ method: "initialized", params: {} }));
   }
   handleMessage(message) {
@@ -37618,9 +37618,9 @@ function projectTurns(threadId, turns) {
 
 // server/index.js
 var root = dirname(dirname(fileURLToPath(import.meta.url)));
-var uiUri = "ui://codex-conversation-tree/v6.html";
+var uiUri = "ui://codex-conversation-tree/v7.html";
 var codex = new CodexClient();
-var server = new McpServer({ name: "codex-conversation-tree", version: "0.3.8" });
+var server = new McpServer({ name: "codex-conversation-tree", version: "0.3.9" });
 var reply = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value });
 var activities = /* @__PURE__ */ new Map();
 var approvals = /* @__PURE__ */ new Map();
@@ -37671,6 +37671,22 @@ K3(server, "list_conversations", {
   const threads = await completeCatalog(result.data ?? [], branches, async (threadId) => (await codex.call("thread/read", { threadId })).thread);
   return reply({ threads, nextCursor: result.nextCursor ?? null, branches });
 });
+K3(server, "list_models", {
+  title: "List available Codex models",
+  description: "List models and reasoning levels available to the current Codex account.",
+  inputSchema: {},
+  _meta: {},
+  annotations: { readOnlyHint: true }
+}, async () => {
+  const result = await codex.call("model/list", { limit: 100 });
+  return reply({ models: (result.data ?? []).filter((model) => !model.hidden).map((model) => ({
+    id: model.model,
+    name: model.displayName,
+    isDefault: model.isDefault,
+    defaultEffort: model.defaultReasoningEffort,
+    efforts: (model.supportedReasoningEfforts ?? []).map((option) => option.reasoningEffort)
+  })) });
+});
 K3(server, "get_conversation_tree", {
   title: "Read a conversation tree",
   description: "Read completed turns from one Codex conversation, including its parent fork identity.",
@@ -37713,12 +37729,12 @@ K3(server, "fork_conversation_at_turn", {
 K3(server, "continue_conversation", {
   title: "Continue Codex conversation",
   description: "Append a new user Turn to the selected existing Codex conversation.",
-  inputSchema: { threadId: external_exports.string().min(1), text: external_exports.string().trim().min(1) },
+  inputSchema: { threadId: external_exports.string().min(1), text: external_exports.string().trim().min(1), model: external_exports.string().min(1).optional(), effort: external_exports.string().min(1).optional() },
   _meta: {},
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
-}, async ({ threadId, text }) => {
+}, async ({ threadId, text, model, effort }) => {
   await codex.call("thread/resume", { threadId, excludeTurns: true });
-  const result = await codex.call("turn/start", { threadId, input: [{ type: "text", text }] });
+  const result = await codex.call("turn/start", { threadId, input: [{ type: "text", text }], ...model ? { model } : {}, ...effort ? { effort } : {} });
   activity(threadId, result.turn.id);
   return reply({ threadId, turnId: result.turn.id, status: result.turn.status });
 });
