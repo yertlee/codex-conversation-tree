@@ -11,3 +11,8 @@ export function visibleMessages(messages = []) {
   return result;
 }
 
+export function appendAgentDelta(current, itemId, delta) {
+  const id = itemId || current?.itemId || null;
+  return { itemId: id, text: current && id === current.itemId ? current.text + delta : delta };
+}
+

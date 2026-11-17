@@ -23786,9 +23786,253 @@ ${text}`;
   }
   return result;
 }
+function appendAgentDelta(current, itemId, delta) {
+  const id = itemId || current?.itemId || null;
+  return { itemId: id, text: current && id === current.itemId ? current.text + delta : delta };
+}
+
+// web/message-renderer.js
+var linkPattern = /^\[([^\]\n]+)\]\(([^\s)]+)\)/;
+function safeLink(href) {
+  try {
+    const url2 = new URL(href);
+    return url2.protocol === "https:" || url2.protocol === "http:" ? url2.href : null;
+  } catch {
+    return null;
+  }
+}
+function parseInline(source) {
+  const parts = [];
+  let rest = String(source ?? "");
+  while (rest) {
+    const code = rest.match(/^`([^`]+)`/);
+    const link = rest.match(linkPattern);
+    const strong = rest.match(/^\*\*([^*\n]+)\*\*/);
+    const emphasis = rest.match(/^\*([^*\n]+)\*/);
+    const token = code ? { type: "code", text: code[1], length: code[0].length } : link ? { type: safeLink(link[2]) ? "link" : "text", text: safeLink(link[2]) ? link[1] : link[0], href: safeLink(link[2]), length: link[0].length } : strong ? { type: "strong", text: strong[1], length: strong[0].length } : emphasis ? { type: "em", text: emphasis[1], length: emphasis[0].length } : null;
+    if (token) {
+      parts.push({ type: token.type, text: token.text, ...token.href ? { href: token.href } : {} });
+      rest = rest.slice(token.length);
+    } else {
+      const next = rest.slice(1).search(/[`*[\[]/);
+      const length = next < 0 ? rest.length : next + 1;
+      parts.push({ type: "text", text: rest.slice(0, length) });
+      rest = rest.slice(length);
+    }
+  }
+  return parts;
+}
+function tableCells(line) {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, "|"));
+}
+function isTableDivider(line, count) {
+  const cells = tableCells(line);
+  return cells.length === count && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+function parseBlocks(source) {
+  const lines = String(source ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const blocks = [];
+  for (let i2 = 0; i2 < lines.length; ) {
+    const line = lines[i2];
+    if (!line.trim()) {
+      i2++;
+      continue;
+    }
+    const fence = line.match(/^\s*```\s*([\w.+-]*)\s*$/);
+    if (fence) {
+      const content = [];
+      i2++;
+      while (i2 < lines.length && !/^\s*```\s*$/.test(lines[i2])) content.push(lines[i2++]);
+      if (i2 < lines.length) i2++;
+      blocks.push({ type: "code", language: fence[1], text: content.join("\n") });
+      continue;
+    }
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+)$/);
+    if (heading) {
+      blocks.push({ type: "heading", level: heading[1].length, text: heading[2] });
+      i2++;
+      continue;
+    }
+    if (line.includes("|") && i2 + 1 < lines.length) {
+      const headers = tableCells(line);
+      if (headers.length > 1 && isTableDivider(lines[i2 + 1], headers.length)) {
+        i2 += 2;
+        const rows = [];
+        while (i2 < lines.length && lines[i2].trim() && lines[i2].includes("|")) {
+          const cells = tableCells(lines[i2++]);
+          rows.push(headers.map((_2, column) => cells[column] ?? ""));
+        }
+        blocks.push({ type: "table", headers, rows });
+        continue;
+      }
+    }
+    if (/^\s{0,3}>/.test(line)) {
+      const quoted = [];
+      while (i2 < lines.length && /^\s{0,3}>/.test(lines[i2])) quoted.push(lines[i2++].replace(/^\s{0,3}>\s?/, ""));
+      blocks.push({ type: "quote", text: quoted.join("\n") });
+      continue;
+    }
+    const list = line.match(/^\s{0,3}([-*+] |\d+\. )(.+)$/);
+    if (list) {
+      const ordered = /^\d/.test(list[1]);
+      const items = [];
+      while (i2 < lines.length) {
+        const item = lines[i2].match(/^\s{0,3}([-*+] |\d+\. )(.+)$/);
+        if (!item || /^\d/.test(item[1]) !== ordered) break;
+        items.push(item[2]);
+        i2++;
+      }
+      blocks.push({ type: ordered ? "ol" : "ul", items });
+      continue;
+    }
+    const paragraph = [];
+    while (i2 < lines.length && lines[i2].trim() && !/^\s*```\s*[\w.+-]*\s*$/.test(lines[i2]) && !/^\s{0,3}#{1,6}\s+/.test(lines[i2]) && !/^\s{0,3}([-*+] |\d+\. )/.test(lines[i2]) && !/^\s{0,3}>/.test(lines[i2]) && !(lines[i2].includes("|") && i2 + 1 < lines.length && isTableDivider(lines[i2 + 1], tableCells(lines[i2]).length))) paragraph.push(lines[i2++]);
+    if (paragraph.length) blocks.push({ type: "paragraph", text: paragraph.join("\n") });
+    else {
+      blocks.push({ type: "paragraph", text: lines[i2] });
+      i2++;
+    }
+  }
+  return blocks;
+}
+function appendInline(parent, source) {
+  const lines = source.split("\n");
+  lines.forEach((line, index) => {
+    if (index) parent.append(document.createElement("br"));
+    for (const part of parseInline(line)) {
+      if (part.type === "text") {
+        parent.append(document.createTextNode(part.text));
+        continue;
+      }
+      const tag = { code: "code", strong: "strong", em: "em", link: "a" }[part.type];
+      const element = document.createElement(tag);
+      element.textContent = part.text;
+      if (part.type === "link") {
+        element.href = part.href;
+        element.target = "_blank";
+        element.rel = "noopener noreferrer";
+      }
+      parent.append(element);
+    }
+  });
+}
+function renderMarkdown(container, source) {
+  container.replaceChildren();
+  for (const block of parseBlocks(source)) {
+    let element;
+    if (block.type === "code") {
+      element = document.createElement("pre");
+      const code = document.createElement("code");
+      code.textContent = block.text;
+      if (block.language) code.dataset.language = block.language;
+      element.append(code);
+    } else if (block.type === "ul" || block.type === "ol") {
+      element = document.createElement(block.type);
+      for (const item of block.items) {
+        const li = document.createElement("li");
+        appendInline(li, item);
+        element.append(li);
+      }
+    } else if (block.type === "table") {
+      element = document.createElement("div");
+      element.className = "detail-table-scroll";
+      const table = document.createElement("table");
+      const head = document.createElement("thead");
+      const headerRow = document.createElement("tr");
+      for (const value of block.headers) {
+        const cell = document.createElement("th");
+        cell.scope = "col";
+        appendInline(cell, value);
+        headerRow.append(cell);
+      }
+      head.append(headerRow);
+      table.append(head);
+      const body = document.createElement("tbody");
+      for (const row of block.rows) {
+        const tr = document.createElement("tr");
+        for (const value of row) {
+          const cell = document.createElement("td");
+          appendInline(cell, value);
+          tr.append(cell);
+        }
+        body.append(tr);
+      }
+      table.append(body);
+      element.append(table);
+    } else if (block.type === "quote") {
+      element = document.createElement("blockquote");
+      appendInline(element, block.text);
+    } else {
+      element = document.createElement(block.type === "heading" ? `h${block.level}` : "p");
+      appendInline(element, block.text);
+    }
+    container.append(element);
+  }
+}
+
+// web/tree-navigation.js
+function searchTurns(source, query) {
+  const needle = String(query ?? "").trim().normalize("NFKC").toLocaleLowerCase();
+  if (!needle || !source?.threads) return [];
+  const matches = [];
+  for (const thread of source.threads) {
+    for (const turn2 of thread.turns ?? []) {
+      const content = `${turn2.question ?? ""}
+${turn2.answer ?? ""}`.normalize("NFKC").toLocaleLowerCase();
+      if (content.includes(needle)) matches.push({ threadId: thread.id, turnId: turn2.id, turn: turn2 });
+    }
+  }
+  return matches;
+}
+function ancestorBranches(source, threadId) {
+  const byId = new Map((source?.threads ?? []).map((thread) => [thread.id, thread]));
+  const path = [];
+  const seen = /* @__PURE__ */ new Set();
+  let current = byId.get(threadId);
+  while (current && current.id !== source.root && !seen.has(current.id)) {
+    seen.add(current.id);
+    path.unshift(current.id);
+    current = byId.get(current.parentId);
+  }
+  return current?.id === source.root ? path : [];
+}
+function expandToTurn(source, match, expanded = /* @__PURE__ */ new Set()) {
+  return /* @__PURE__ */ new Set([...expanded, ...ancestorBranches(source, match.threadId)]);
+}
+function centerTurn(layout, match, viewport, scale, cardSize) {
+  const node2 = layout.nodes.find((entry) => entry.thread.id === match.threadId && entry.turn.id === match.turnId);
+  if (!node2) return null;
+  return {
+    panX: viewport.width / 2 - (node2.x + cardSize.width / 2) * scale,
+    panY: viewport.height / 2 - (node2.y + cardSize.height / 2) * scale
+  };
+}
+function treeViewStorageKey(rootId) {
+  return `tree-view:${rootId}`;
+}
+function serializeTreeView({ expanded, scale, panX, panY }) {
+  return JSON.stringify({ expanded: [...expanded], scale, panX, panY });
+}
+function restoreTreeView(raw, source) {
+  let stored;
+  try {
+    stored = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!stored || !Array.isArray(stored.expanded) || ![stored.scale, stored.panX, stored.panY].every(Number.isFinite)) return null;
+  const validBranches = new Set((source?.threads ?? []).filter((thread) => thread.id !== source.root).map((thread) => thread.id));
+  return {
+    expanded: new Set(stored.expanded.filter((id) => validBranches.has(id))),
+    scale: Math.max(0.28, Math.min(1.8, stored.scale)),
+    panX: stored.panX,
+    panY: stored.panY
+  };
+}
 
 // web/main.js
-var app = new i({ name: "codex-conversation-tree", version: "0.2.0" });
+var app = new i({ name: "codex-conversation-tree", version: "0.3.7" });
 var $ = (id) => document.getElementById(id);
 var CARD_W = 286;
 var CARD_H = 146;
@@ -23823,7 +24067,7 @@ var demo = {
 function turn(id, question, answer, time3) {
   return { id, question, answer, time: time3, status: "\u5DF2\u5B8C\u6210", messages: [{ role: "user", text: question }, { role: "assistant", text: answer }], tools: [] };
 }
-var state = { mode: "demo", source: null, catalog: [], branches: {}, selectedThreadId: null, expanded: /* @__PURE__ */ new Set(), selected: null, run: null, scale: 1, panX: 0, panY: 0, bounds: { width: 0, height: 0 }, dragging: null, request: 0 };
+var state = { mode: "demo", source: null, catalog: [], branches: {}, selectedThreadId: null, expanded: /* @__PURE__ */ new Set(), selected: null, run: null, scale: 1, panX: 0, panY: 0, bounds: { width: 0, height: 0 }, dragging: null, request: 0, searchMatches: [], searchIndex: -1 };
 function el(tag, cls, label) {
   const node2 = document.createElement(tag);
   if (cls) node2.className = cls;
@@ -23849,6 +24093,9 @@ function save(key, value) {
     localStorage.setItem(key, value);
   } catch {
   }
+}
+function saveView() {
+  if (state.mode === "real" && state.source?.threads.length) save(treeViewStorageKey(state.source.root), serializeTreeView(state));
 }
 async function call(name, args) {
   const result = await app.callServerTool({ name, arguments: args });
@@ -23942,13 +24189,13 @@ function draw() {
     return;
   }
   $("empty").hidden = true;
-  const layout = buildLayout();
+  const layout = buildLayout(), matched = new Set(state.searchMatches.map((m) => `${m.threadId}:${m.turnId}`));
   state.bounds = { width: layout.width, height: layout.height };
   svg.setAttribute("width", layout.width);
   svg.setAttribute("height", layout.height);
   for (const w2 of layout.wires) svg.append(drawWire(w2));
   for (const n of layout.nodes) {
-    const card = el("button", "node" + (n.thread.id !== state.source.root ? " branch" : "") + (state.selected?.id === n.turn.id ? " selected" : ""));
+    const card = el("button", "node" + (n.thread.id !== state.source.root ? " branch" : "") + (state.selected?.id === n.turn.id ? " selected" : "") + (matched.has(`${n.thread.id}:${n.turn.id}`) ? " match" : ""));
     card.style.left = n.x + "px";
     card.style.top = n.y + "px";
     card.append(el("div", "node-top"));
@@ -23975,6 +24222,7 @@ function draw() {
       renderCatalog();
       if (p2.thread.turns.length) state.expanded.add(p2.thread.id);
       draw();
+      saveView();
     };
     area.append(button);
   }
@@ -23991,6 +24239,7 @@ function fit() {
   state.panX = (box.width - state.bounds.width * s) / 2;
   state.panY = Math.max(0, (box.height - state.bounds.height * s) / 2);
   applyTransform();
+  saveView();
 }
 function readableView() {
   fit();
@@ -24003,22 +24252,19 @@ function setZoom(next, point) {
   state.panY = y - (y - state.panY) * next / state.scale;
   state.scale = next;
   applyTransform();
+  saveView();
 }
-function selectTurn(item, thread) {
+function selectTurn(item, thread, { reframe = false } = {}) {
   state.selected = item;
-  if (state.mode === "real" && thread) {
-    state.selectedThreadId = thread.id;
-    renderCatalog();
-    updateComposer();
-  }
   $("shell").classList.add("has-detail");
   $("detail-title").textContent = item.question || "Turn \u8BE6\u60C5";
   const body = $("detail-body");
   body.replaceChildren();
   const messages = visibleMessages(item.messages);
   for (const m of messages) {
-    const block = el("section", `detail-message ${m.role}`);
-    block.append(el("div", "detail-role", m.role === "user" ? "\u4F60" : "\u52A9\u624B"), el("div", "detail-text", m.text));
+    const block = el("section", `detail-message ${m.role}`), content = el("div", "detail-text");
+    renderMarkdown(content, m.text);
+    block.append(el("div", "detail-role", m.role === "user" ? "\u4F60" : "\u52A9\u624B"), content);
     body.append(block);
   }
   if (state.mode === "demo") {
@@ -24046,12 +24292,90 @@ function selectTurn(item, thread) {
     button.disabled = item.status === "\u8FDB\u884C\u4E2D";
     button.onclick = () => forkTurn(thread.id, item.id);
     body.append(el("div", "detail-role", "\u521B\u5EFA\u771F\u5B9E\u4F1A\u8BDD\u5206\u652F"), button);
+    const continueButton = el("button", "btn", "\u7EED\u804A\u6B64\u4F1A\u8BDD\u672B\u5C3E");
+    continueButton.onclick = () => {
+      state.selectedThreadId = thread.id;
+      renderCatalog();
+      updateComposer();
+      $("composer-input").focus();
+    };
+    body.append(el("div", "detail-role", "\u65B0\u6D88\u606F\u4F1A\u63A5\u5728\u6B64\u4F1A\u8BDD\u672B\u5C3E\uFF0C\u800C\u4E0D\u662F\u5F53\u524D\u5361\u7247\u4E4B\u540E"), continueButton);
   }
   body.append(el("div", "detail-id", `Turn ID \xB7 ${item.id}`));
   draw();
-  requestAnimationFrame(readableView);
+  if (reframe) requestAnimationFrame(readableView);
 }
-function configureCanvas(name, meta3) {
+function resetTreeSearch() {
+  state.searchMatches = [];
+  state.searchIndex = -1;
+  const input2 = $("turn-search");
+  if (input2) input2.value = "";
+  updateTreeSearchStatus();
+}
+function updateTreeSearchStatus() {
+  const count = state.searchMatches.length;
+  $("turn-search-count").textContent = count ? `${state.searchIndex + 1} / ${count}` : $("turn-search").value.trim() ? "0 \u4E2A\u7ED3\u679C" : "\u67E5\u627E Turn";
+  $("turn-search-prev").disabled = !count;
+  $("turn-search-next").disabled = !count;
+}
+function goToSearch(index) {
+  if (!state.searchMatches.length) return;
+  state.searchIndex = (index + state.searchMatches.length) % state.searchMatches.length;
+  const match = state.searchMatches[state.searchIndex];
+  state.expanded = expandToTurn(state.source, match, state.expanded);
+  selectTurn(match.turn, threadById(match.threadId));
+  requestAnimationFrame(() => {
+    const box = $("viewport").getBoundingClientRect();
+    const position = centerTurn(buildLayout(), match, { width: box.width, height: box.height }, state.scale, { width: CARD_W, height: CARD_H });
+    if (position) {
+      state.panX = position.panX;
+      state.panY = position.panY;
+      applyTransform();
+      saveView();
+    }
+  });
+  updateTreeSearchStatus();
+}
+function updateTreeSearch() {
+  state.searchMatches = searchTurns(state.source, $("turn-search").value);
+  state.searchIndex = -1;
+  if (state.searchMatches.length) goToSearch(0);
+  else {
+    draw();
+    updateTreeSearchStatus();
+  }
+}
+function installTreeSearch() {
+  const box = el("div", "tree-search");
+  const input2 = el("input", "tree-search-input");
+  input2.id = "turn-search";
+  input2.type = "search";
+  input2.placeholder = "\u67E5\u627E\u5F53\u524D\u6811\u4E2D\u7684\u95EE\u7B54\u2026";
+  input2.setAttribute("aria-label", "\u67E5\u627E\u5F53\u524D\u6811\u4E2D\u7684\u95EE\u7B54");
+  const count = el("span", "tree-search-count");
+  count.id = "turn-search-count";
+  const previous = el("button", "tree-search-step", "\u2191");
+  previous.id = "turn-search-prev";
+  previous.type = "button";
+  previous.setAttribute("aria-label", "\u4E0A\u4E00\u4E2A\u5339\u914D");
+  const next = el("button", "tree-search-step", "\u2193");
+  next.id = "turn-search-next";
+  next.type = "button";
+  next.setAttribute("aria-label", "\u4E0B\u4E00\u4E2A\u5339\u914D");
+  box.append(input2, count, previous, next);
+  $("viewport").parentElement.querySelector(".canvas-toolbar").insertBefore(box, $("viewport").parentElement.querySelector(".spacer"));
+  input2.oninput = updateTreeSearch;
+  input2.onkeydown = (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      goToSearch(state.searchIndex + (event.shiftKey ? -1 : 1));
+    }
+  };
+  previous.onclick = () => goToSearch(state.searchIndex - 1);
+  next.onclick = () => goToSearch(state.searchIndex + 1);
+  updateTreeSearchStatus();
+}
+function configureCanvas(name, meta3, { reframe = true } = {}) {
   $("canvas-name").textContent = name;
   $("canvas-meta").textContent = meta3;
   $("page-title").textContent = name;
@@ -24059,14 +24383,16 @@ function configureCanvas(name, meta3) {
   state.selected = null;
   $("shell").classList.remove("has-detail");
   draw();
-  requestAnimationFrame(readableView);
+  if (reframe) requestAnimationFrame(readableView);
 }
 function showDemo() {
+  saveView();
   state.request++;
   state.mode = "demo";
   state.source = demo;
   state.selectedThreadId = null;
   state.expanded.clear();
+  resetTreeSearch();
   save("tree-selection", "demo");
   renderCatalog();
   updateComposer();
@@ -24092,9 +24418,11 @@ function updateComposer() {
   if (!visible) return;
   const thread = state.catalog.find((t) => t.id === state.selectedThreadId);
   $("composer-target").textContent = `\u7EE7\u7EED\uFF1A${titleFor(thread || { id: state.selectedThreadId })}`;
-  $("composer-status").textContent = state.run?.threadId === state.selectedThreadId ? "\u6B63\u5728\u751F\u6210\u2026" : "\u6D88\u606F\u4F1A\u63A5\u5728\u6B64\u4F1A\u8BDD\u672B\u5C3E";
+  $("composer-status").textContent = state.run?.threadId === state.selectedThreadId ? "\u6B63\u5728\u751F\u6210\u2026" : state.run ? "\u53E6\u4E00\u6761\u4F1A\u8BDD\u6B63\u5728\u751F\u6210\u2026" : "\u6D88\u606F\u4F1A\u63A5\u5728\u6B64\u4F1A\u8BDD\u672B\u5C3E";
   $("send-turn").disabled = !!state.run;
-  $("stop-turn").hidden = !state.run;
+  $("stop-turn").hidden = !state.run || state.run.threadId !== state.selectedThreadId;
+  $("live-answer").hidden = !state.run || state.run.threadId !== state.selectedThreadId || !state.run.live.answer || state.run.live.answer === "\u6B63\u5728\u751F\u6210\u2026";
+  if (!$("live-answer").hidden) $("live-answer").textContent = state.run.live.answer;
 }
 async function refreshCatalog() {
   const result = await call("list_conversations", { limit: 100 });
@@ -24107,12 +24435,23 @@ async function forkTurn(threadId, turnId) {
   if (button) button.disabled = true;
   try {
     const result = await call("fork_conversation_at_turn", { threadId, turnId });
-    if (result.saveError) toast(`\u5206\u652F\u5DF2\u521B\u5EFA\uFF0C\u4F46\u5B9A\u4F4D\u8BB0\u5F55\u4FDD\u5B58\u5931\u8D25\uFF1A${result.saveError}`);
-    await refreshCatalog();
+    try {
+      await refreshCatalog();
+    } catch (error62) {
+      toast(`\u5206\u652F\u5DF2\u521B\u5EFA\uFF0C\u4F1A\u8BDD\u5217\u8868\u5237\u65B0\u5931\u8D25\uFF1A${error62.message}`);
+    }
+    state.branches[result.fork.id] = { parentThreadId: threadId, sourceTurnId: turnId };
+    const child = state.catalog.find((t) => t.id === result.fork.id);
+    if (child) child.forkedFromId = threadId;
+    else state.catalog.push({ ...result.fork, forkedFromId: threadId });
     await showReal(result.fork.id);
     state.expanded.add(result.fork.id);
     draw();
-    toast("\u771F\u5B9E\u5206\u652F\u5DF2\u521B\u5EFA\uFF0C\u73B0\u53EF\u5728\u4E0B\u65B9\u7EE7\u7EED\u5BF9\u8BDD");
+    saveView();
+    if (result.saveError) {
+      $("canvas-meta").textContent += " \xB7 \u5206\u652F\u5B9A\u4F4D\u672A\u4FDD\u5B58\uFF0C\u91CD\u542F\u540E\u53EF\u80FD\u65E0\u6CD5\u5F52\u4F4D";
+      toast(`\u5206\u652F\u5DF2\u521B\u5EFA\uFF0C\u4F46\u5B9A\u4F4D\u8BB0\u5F55\u4FDD\u5B58\u5931\u8D25\uFF1A${result.saveError}`);
+    } else toast("\u771F\u5B9E\u5206\u652F\u5DF2\u521B\u5EFA\uFF0C\u73B0\u53EF\u5728\u4E0B\u65B9\u7EE7\u7EED\u5BF9\u8BDD");
   } catch (error62) {
     toast(`\u521B\u5EFA\u5206\u652F\u5931\u8D25\uFF1A${error62.message}`);
   } finally {
@@ -24157,27 +24496,59 @@ async function pollActivity() {
     for (const event of result.events) {
       if (event.method === "item/agentMessage/delta") {
         const delta = event.params.delta || "";
-        $("live-answer").hidden = false;
-        $("live-answer").textContent += delta;
         if (run.live) {
-          run.live.answer = run.live.answer === "\u6B63\u5728\u751F\u6210\u2026" ? delta : run.live.answer + delta;
+          run.message = appendAgentDelta(run.message, event.params.itemId, delta);
+          run.live.answer = run.message.text;
           run.live.messages[1] = { role: "assistant", text: run.live.answer };
-          if (state.selected?.id === run.live.id) selectTurn(run.live, threadById(run.threadId));
-          else draw();
+          if (state.mode === "real" && state.selectedThreadId === run.threadId) {
+            $("live-answer").hidden = false;
+            $("live-answer").textContent = run.live.answer;
+          }
+          if (state.mode === "real" && threadById(run.threadId)) {
+            if (state.selected?.id === run.live.id) selectTurn(run.live, threadById(run.threadId), { reframe: false });
+            else draw();
+          }
         }
       }
     }
-    renderApproval(result.pending || []);
+    if (state.mode === "real" && state.selectedThreadId === run.threadId) renderApproval(result.pending || []);
+    else renderApproval([]);
     if (result.status !== "inProgress" && result.status !== "unknown") {
       state.run = null;
       updateComposer();
-      $("composer-status").textContent = result.status === "completed" ? "\u5DF2\u5B8C\u6210" : `\u5DF2\u7ED3\u675F\uFF1A${result.status}`;
+      if (state.mode === "real" && state.selectedThreadId === run.threadId) $("composer-status").textContent = result.status === "completed" ? "\u5DF2\u5B8C\u6210" : `\u5DF2\u7ED3\u675F\uFF1A${result.status}`;
       if (result.status !== "completed") toast(`\u672C\u8F6E\u72B6\u6001\uFF1A${result.status}`);
-      await refreshCatalog();
-      await showReal(run.threadId);
-      const updatedThread = threadById(run.threadId);
-      const finalTurn = updatedThread?.turns.at(-1);
-      if (finalTurn) selectTurn(finalTurn, updatedThread);
+      let finalTurns;
+      try {
+        finalTurns = await readTurns(run.threadId);
+      } catch (error62) {
+        toast(`\u672C\u8F6E\u5DF2\u7ED3\u675F\uFF0C\u4F46\u8BFB\u53D6\u6700\u7EC8\u56DE\u7B54\u5931\u8D25\uFF1A${error62.message}`);
+      }
+      try {
+        await refreshCatalog();
+      } catch (error62) {
+        toast(`\u4F1A\u8BDD\u5217\u8868\u5237\u65B0\u5931\u8D25\uFF1A${error62.message}`);
+      }
+      if (state.mode === "real" && state.source?.root === rootOf(run.threadId)) {
+        const updatedThread = threadById(run.threadId);
+        if (updatedThread) {
+          if (finalTurns) {
+            updatedThread.allTurns = finalTurns;
+            const parent = threadById(updatedThread.parentId);
+            updatedThread.turns = parent ? projectForkTurns(parent.allTurns || parent.turns, finalTurns, updatedThread.anchorId).turns : finalTurns;
+          }
+          let finalTurn = updatedThread.turns.find((t) => t.id === run.turnId);
+          if (!finalTurn) {
+            run.live.status = result.status === "completed" ? "\u5DF2\u5B8C\u6210" : `\u5DF2\u7ED3\u675F\uFF1A${result.status}`;
+            updatedThread.turns.push(run.live);
+            finalTurn = run.live;
+          }
+          if (finalTurn === run.live) finalTurn.status = result.status === "completed" ? "\u5DF2\u5B8C\u6210" : `\u5DF2\u7ED3\u675F\uFF1A${result.status}`;
+          if (state.selected?.id === run.live.id && finalTurn) selectTurn(finalTurn, updatedThread, { reframe: false });
+          else draw();
+        }
+      }
+      $("live-answer").hidden = true;
       return;
     }
   } catch (error62) {
@@ -24214,6 +24585,8 @@ async function sendTurn() {
   }
 }
 async function showReal(id) {
+  saveView();
+  resetTreeSearch();
   const request = ++state.request;
   state.mode = "real";
   state.selectedThreadId = id;
@@ -24231,7 +24604,7 @@ async function showReal(id) {
   }
   renderCatalog();
   updateComposer();
-  configureCanvas(titleFor(rootThread || { id: root }), "\u6B63\u5728\u8BFB\u53D6\u771F\u5B9E\u4F1A\u8BDD\u2026");
+  configureCanvas(titleFor(rootThread || { id: root }), "\u6B63\u5728\u8BFB\u53D6\u771F\u5B9E\u4F1A\u8BDD\u2026", { reframe: false });
   $("empty").hidden = false;
   $("empty").textContent = "\u6B63\u5728\u8BFB\u53D6\u4F1A\u8BDD\u5386\u53F2\u2026";
   try {
@@ -24258,7 +24631,14 @@ async function showReal(id) {
     state.source = { root, threads: data };
     save("tree-selection", id);
     renderCatalog();
-    configureCanvas(titleFor(rootThread || { id: root }), `${data.length} \u4E2A\u5173\u8054\u4F1A\u8BDD \xB7 ${data.find((t) => t.id === root)?.turns.length || 0} \u4E2A\u4E3B\u7EBF Turn${unresolved ? ` \xB7 ${unresolved} \u6761\u5206\u652F\u951A\u70B9\u672A\u77E5` : ""}`);
+    const restored = restoreTreeView(saved(treeViewStorageKey(root)), state.source);
+    if (restored) {
+      state.expanded = /* @__PURE__ */ new Set([...restored.expanded, ...state.expanded]);
+      state.scale = restored.scale;
+      state.panX = restored.panX;
+      state.panY = restored.panY;
+    }
+    configureCanvas(titleFor(rootThread || { id: root }), `${data.length} \u4E2A\u5173\u8054\u4F1A\u8BDD \xB7 ${data.find((t) => t.id === root)?.turns.length || 0} \u4E2A\u4E3B\u7EBF Turn${unresolved ? ` \xB7 ${unresolved} \u6761\u5206\u652F\u951A\u70B9\u672A\u77E5` : ""}`, { reframe: !restored });
     updateComposer();
     if (unresolved) toast("\u90E8\u5206\u5206\u652F\u6765\u6E90\u672A\u77E5\uFF0C\u4ECD\u53EF\u4ECE\u5DE6\u4FA7\u9009\u62E9\u4F1A\u8BDD");
   } catch (error62) {
@@ -24269,6 +24649,7 @@ async function showReal(id) {
   }
 }
 function setup() {
+  installTreeSearch();
   $("show-demo").onclick = showDemo;
   $("show-real").onclick = () => {
     const first = state.catalog.find((t) => !t.forkedFromId) || state.catalog[0];
@@ -24280,7 +24661,6 @@ function setup() {
     $("shell").classList.remove("has-detail");
     state.selected = null;
     draw();
-    requestAnimationFrame(readableView);
   };
   $("collapse-all").onclick = () => {
     state.expanded.clear();
@@ -24326,10 +24706,12 @@ function setup() {
   view.addEventListener("pointerup", () => {
     state.dragging = null;
     view.classList.remove("dragging");
+    saveView();
   });
   view.addEventListener("pointercancel", () => {
     state.dragging = null;
     view.classList.remove("dragging");
+    saveView();
   });
   view.addEventListener("wheel", (e) => {
     e.preventDefault();

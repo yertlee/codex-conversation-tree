@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { CodexClient } from '../server/codex-client.js';
 import { readBranches, saveBranch } from '../server/branch-store.js';
-import { visibleMessages } from '../web/detail-model.js';
+import { visibleMessages, appendAgentDelta } from '../web/detail-model.js';
 
 test('detail view keeps only the readable conversation messages', () => {
   assert.deepEqual(visibleMessages([
@@ -18,6 +18,13 @@ test('detail view keeps only the readable conversation messages', () => {
     { role: 'user', text: '问题' },
     { role: 'assistant', text: '回答一\n\n回答二' },
   ]);
+});
+
+test('streaming switches to the latest assistant message item', () => {
+  const first = appendAgentDelta(null, 'progress', '正在检索');
+  const firstDone = appendAgentDelta(first, 'progress', '资料');
+  assert.deepEqual(firstDone, { itemId: 'progress', text: '正在检索资料' });
+  assert.deepEqual(appendAgentDelta(firstDone, 'final', '最终回答'), { itemId: 'final', text: '最终回答' });
 });
 
 test('fork anchor records survive reload and preserve separate children', async () => {

@@ -1,8 +1,10 @@
 import { App } from '@modelcontextprotocol/ext-apps';
 import { treeRootId, projectForkTurns } from './tree-model.js';
-import { visibleMessages } from './detail-model.js';
+import { visibleMessages, appendAgentDelta } from './detail-model.js';
+import { renderMarkdown } from './message-renderer.js';
+import { searchTurns, expandToTurn, centerTurn, treeViewStorageKey, serializeTreeView, restoreTreeView } from './tree-navigation.js';
 
-const app = new App({ name: 'codex-conversation-tree', version: '0.2.0' });
+const app = new App({ name: 'codex-conversation-tree', version: '0.3.7' });
 const $ = id => document.getElementById(id);
 const CARD_W = 286, CARD_H = 146, ROW_GAP = 38, COL_GAP = 150, PILL_H = 36;
 const demo = {
@@ -30,11 +32,12 @@ const demo = {
   ]
 };
 function turn(id, question, answer, time) { return { id, question, answer, time, status:'已完成', messages:[{role:'user',text:question},{role:'assistant',text:answer}], tools:[] }; }
-const state = { mode:'demo', source:null, catalog:[], branches:{}, selectedThreadId:null, expanded:new Set(), selected:null, run:null, scale:1, panX:0, panY:0, bounds:{width:0,height:0}, dragging:null, request:0 };
+const state = { mode:'demo', source:null, catalog:[], branches:{}, selectedThreadId:null, expanded:new Set(), selected:null, run:null, scale:1, panX:0, panY:0, bounds:{width:0,height:0}, dragging:null, request:0, searchMatches:[], searchIndex:-1 };
 function el(tag, cls, label) { const node=document.createElement(tag); if(cls) node.className=cls; if(label!==undefined) node.textContent=label; return node; }
 function toast(message) { const box=$('toast'); box.textContent=message; box.hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(()=>box.hidden=true,2800); }
 function saved(key) { try { return localStorage.getItem(key); } catch { return null; } }
 function save(key,value) { try { localStorage.setItem(key,value); } catch {} }
+function saveView(){if(state.mode==='real'&&state.source?.threads.length)save(treeViewStorageKey(state.source.root),serializeTreeView(state));}
 async function call(name,args) { const result=await app.callServerTool({name,arguments:args}); if(result.isError) throw new Error(result.content?.[0]?.text||'读取失败'); return result.structuredContent??JSON.parse(result.content[0].text); }
 function titleFor(thread) { return thread.name||thread.preview||`会话 ${thread.id.slice(0,8)}`; }
 function rootOf(id) { return treeRootId(id,state.catalog); }
@@ -60,23 +63,22 @@ function buildLayout() {
 function drawWire(w){const p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('class','wire'+(w.branch?' branch':''));if(w.branch){const mid=(w.x1+w.x2)/2;p.setAttribute('d',`M${w.x1} ${w.y1} C${mid} ${w.y1},${mid} ${w.y2},${w.x2} ${w.y2}`);}else p.setAttribute('d',`M${w.x1} ${w.y1} L${w.x2} ${w.y2}`);return p;}
 function draw() {
   const area=$('nodes'),svg=$('wires');area.replaceChildren();svg.replaceChildren();if(!state.source||!threadById(state.source.root)?.turns.length){$('empty').hidden=false;$('empty').textContent='这段会话还没有可显示的已完成 Turn。';return;}$('empty').hidden=true;
-  const layout=buildLayout();state.bounds={width:layout.width,height:layout.height};svg.setAttribute('width',layout.width);svg.setAttribute('height',layout.height);for(const w of layout.wires)svg.append(drawWire(w));
-  for(const n of layout.nodes){const card=el('button','node'+(n.thread.id!==state.source.root?' branch':'')+(state.selected?.id===n.turn.id?' selected':''));card.style.left=n.x+'px';card.style.top=n.y+'px';card.append(el('div','node-top'));const top=card.firstChild;top.append(el('span','node-index',String(n.index+1).padStart(2,'0')),el('span','node-kind',n.thread.id===state.source.root?'主线':'分支'),el('span','node-status',n.turn.status||'已完成'));card.append(el('div','node-question',n.turn.question||'（无文字提问）'),el('div','node-answer',n.turn.answer||'（无文字回答）'));const bottom=el('div','node-bottom');bottom.append(el('span','',n.turn.time||n.turn.id.slice(0,8)));if(n.turn.tools?.length)bottom.append(el('span','',`工具 ${n.turn.tools.length}`));if(n.children.length)bottom.append(el('span','branch-count',`${n.children.length} 条分支 ↗`));card.append(bottom);card.onclick=()=>selectTurn(n.turn,n.thread);area.append(card);}
-  for(const p of layout.pills){const button=el('button','branch-pill'+(state.selectedThreadId===p.thread.id?' selected':''),p.thread.name);button.style.left=p.x+'px';button.style.top=p.y+'px';button.append(el('small','',`${p.thread.turns.length} Turn`));button.title=p.thread.turns.length?'展开分支':'选择空分支';button.onclick=()=>{state.selectedThreadId=p.thread.id;updateComposer();renderCatalog();if(p.thread.turns.length)state.expanded.add(p.thread.id);draw();};area.append(button);}
+  const layout=buildLayout(),matched=new Set(state.searchMatches.map(m=>`${m.threadId}:${m.turnId}`));state.bounds={width:layout.width,height:layout.height};svg.setAttribute('width',layout.width);svg.setAttribute('height',layout.height);for(const w of layout.wires)svg.append(drawWire(w));
+  for(const n of layout.nodes){const card=el('button','node'+(n.thread.id!==state.source.root?' branch':'')+(state.selected?.id===n.turn.id?' selected':'')+(matched.has(`${n.thread.id}:${n.turn.id}`)?' match':''));card.style.left=n.x+'px';card.style.top=n.y+'px';card.append(el('div','node-top'));const top=card.firstChild;top.append(el('span','node-index',String(n.index+1).padStart(2,'0')),el('span','node-kind',n.thread.id===state.source.root?'主线':'分支'),el('span','node-status',n.turn.status||'已完成'));card.append(el('div','node-question',n.turn.question||'（无文字提问）'),el('div','node-answer',n.turn.answer||'（无文字回答）'));const bottom=el('div','node-bottom');bottom.append(el('span','',n.turn.time||n.turn.id.slice(0,8)));if(n.turn.tools?.length)bottom.append(el('span','',`工具 ${n.turn.tools.length}`));if(n.children.length)bottom.append(el('span','branch-count',`${n.children.length} 条分支 ↗`));card.append(bottom);card.onclick=()=>selectTurn(n.turn,n.thread);area.append(card);}
+  for(const p of layout.pills){const button=el('button','branch-pill'+(state.selectedThreadId===p.thread.id?' selected':''),p.thread.name);button.style.left=p.x+'px';button.style.top=p.y+'px';button.append(el('small','',`${p.thread.turns.length} Turn`));button.title=p.thread.turns.length?'展开分支':'选择空分支';button.onclick=()=>{state.selectedThreadId=p.thread.id;updateComposer();renderCatalog();if(p.thread.turns.length)state.expanded.add(p.thread.id);draw();saveView();};area.append(button);}
   applyTransform();
 }
 function applyTransform(){ $('scene').style.transform=`translate(${state.panX}px,${state.panY}px) scale(${state.scale})`; $('zoom-label').textContent=Math.round(state.scale*100)+'%'; }
-function fit(){const box=$('viewport').getBoundingClientRect();const s=Math.min(1,Math.max(.28,Math.min((box.width-70)/state.bounds.width,(box.height-95)/state.bounds.height)));state.scale=s;state.panX=(box.width-state.bounds.width*s)/2;state.panY=Math.max(0,(box.height-state.bounds.height*s)/2);applyTransform();}
+function fit(){const box=$('viewport').getBoundingClientRect();const s=Math.min(1,Math.max(.28,Math.min((box.width-70)/state.bounds.width,(box.height-95)/state.bounds.height)));state.scale=s;state.panX=(box.width-state.bounds.width*s)/2;state.panY=Math.max(0,(box.height-state.bounds.height*s)/2);applyTransform();saveView();}
 function readableView(){fit();if(state.scale<.8)setZoom(.8);}
-function setZoom(next,point){const box=$('viewport').getBoundingClientRect(),x=point?.x??box.width/2,y=point?.y??box.height/2;next=Math.max(.28,Math.min(1.8,next));state.panX=x-(x-state.panX)*next/state.scale;state.panY=y-(y-state.panY)*next/state.scale;state.scale=next;applyTransform();}
-function selectTurn(item,thread){
+function setZoom(next,point){const box=$('viewport').getBoundingClientRect(),x=point?.x??box.width/2,y=point?.y??box.height/2;next=Math.max(.28,Math.min(1.8,next));state.panX=x-(x-state.panX)*next/state.scale;state.panY=y-(y-state.panY)*next/state.scale;state.scale=next;applyTransform();saveView();}
+function selectTurn(item,thread,{reframe=false}={}){
   state.selected=item;
-  if(state.mode==='real'&&thread){state.selectedThreadId=thread.id;renderCatalog();updateComposer();}
   $('shell').classList.add('has-detail');
   $('detail-title').textContent=item.question||'Turn 详情';
   const body=$('detail-body');body.replaceChildren();
   const messages=visibleMessages(item.messages);
-  for(const m of messages){const block=el('section',`detail-message ${m.role}`);block.append(el('div','detail-role',m.role==='user'?'你':'助手'),el('div','detail-text',m.text));body.append(block);}
+  for(const m of messages){const block=el('section',`detail-message ${m.role}`),content=el('div','detail-text');renderMarkdown(content,m.text);block.append(el('div','detail-role',m.role==='user'?'你':'助手'),content);body.append(block);}
   if(state.mode==='demo'){
     const form=el('form','demo-form'),input=el('input'),button=el('button','btn primary','创建分支');
     input.placeholder='给分支起个名字';input.maxLength=48;input.required=true;button.type='submit';
@@ -87,11 +89,56 @@ function selectTurn(item,thread){
     button.disabled=item.status==='进行中';
     button.onclick=()=>forkTurn(thread.id,item.id);
     body.append(el('div','detail-role','创建真实会话分支'),button);
+    const continueButton=el('button','btn','续聊此会话末尾');
+    continueButton.onclick=()=>{state.selectedThreadId=thread.id;renderCatalog();updateComposer();$('composer-input').focus();};
+    body.append(el('div','detail-role','新消息会接在此会话末尾，而不是当前卡片之后'),continueButton);
   }
-  body.append(el('div','detail-id',`Turn ID · ${item.id}`));draw();requestAnimationFrame(readableView);
+  body.append(el('div','detail-id',`Turn ID · ${item.id}`));draw();if(reframe)requestAnimationFrame(readableView);
 }
-function configureCanvas(name,meta){$('canvas-name').textContent=name;$('canvas-meta').textContent=meta;$('page-title').textContent=name;$('page-subtitle').textContent=meta;state.selected=null;$('shell').classList.remove('has-detail');draw();requestAnimationFrame(readableView);}
-function showDemo(){state.request++;state.mode='demo';state.source=demo;state.selectedThreadId=null;state.expanded.clear();save('tree-selection','demo');renderCatalog();updateComposer();configureCanvas('构建一个可靠的 RAG 服务','示例会话 · 5 条路径 · 点击分支标签展开');}
+function resetTreeSearch(){
+  state.searchMatches=[];state.searchIndex=-1;
+  const input=$('turn-search');if(input)input.value='';
+  updateTreeSearchStatus();
+}
+function updateTreeSearchStatus(){
+  const count=state.searchMatches.length;
+  $('turn-search-count').textContent=count?`${state.searchIndex+1} / ${count}`:$('turn-search').value.trim()?'0 个结果':'查找 Turn';
+  $('turn-search-prev').disabled=!count;$('turn-search-next').disabled=!count;
+}
+function goToSearch(index){
+  if(!state.searchMatches.length)return;
+  state.searchIndex=(index+state.searchMatches.length)%state.searchMatches.length;
+  const match=state.searchMatches[state.searchIndex];
+  state.expanded=expandToTurn(state.source,match,state.expanded);
+  selectTurn(match.turn,threadById(match.threadId));
+  requestAnimationFrame(()=>{
+    const box=$('viewport').getBoundingClientRect();
+    const position=centerTurn(buildLayout(),match,{width:box.width,height:box.height},state.scale,{width:CARD_W,height:CARD_H});
+    if(position){state.panX=position.panX;state.panY=position.panY;applyTransform();saveView();}
+  });
+  updateTreeSearchStatus();
+}
+function updateTreeSearch(){
+  state.searchMatches=searchTurns(state.source,$('turn-search').value);
+  state.searchIndex=-1;
+  if(state.searchMatches.length)goToSearch(0);
+  else{draw();updateTreeSearchStatus();}
+}
+function installTreeSearch(){
+  const box=el('div','tree-search');
+  const input=el('input','tree-search-input');input.id='turn-search';input.type='search';input.placeholder='查找当前树中的问答…';input.setAttribute('aria-label','查找当前树中的问答');
+  const count=el('span','tree-search-count');count.id='turn-search-count';
+  const previous=el('button','tree-search-step','↑');previous.id='turn-search-prev';previous.type='button';previous.setAttribute('aria-label','上一个匹配');
+  const next=el('button','tree-search-step','↓');next.id='turn-search-next';next.type='button';next.setAttribute('aria-label','下一个匹配');
+  box.append(input,count,previous,next);
+  $('viewport').parentElement.querySelector('.canvas-toolbar').insertBefore(box,$('viewport').parentElement.querySelector('.spacer'));
+  input.oninput=updateTreeSearch;
+  input.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();goToSearch(state.searchIndex+(event.shiftKey?-1:1));}};
+  previous.onclick=()=>goToSearch(state.searchIndex-1);next.onclick=()=>goToSearch(state.searchIndex+1);
+  updateTreeSearchStatus();
+}
+function configureCanvas(name,meta,{reframe=true}={}){$('canvas-name').textContent=name;$('canvas-meta').textContent=meta;$('page-title').textContent=name;$('page-subtitle').textContent=meta;state.selected=null;$('shell').classList.remove('has-detail');draw();if(reframe)requestAnimationFrame(readableView);}
+function showDemo(){saveView();state.request++;state.mode='demo';state.source=demo;state.selectedThreadId=null;state.expanded.clear();resetTreeSearch();save('tree-selection','demo');renderCatalog();updateComposer();configureCanvas('构建一个可靠的 RAG 服务','示例会话 · 5 条路径 · 点击分支标签展开');}
 async function readTurns(threadId){let cursor,turns=[];do{const page=await call('get_conversation_tree',{threadId,limit:100,...cursor?{cursor}:{}});turns.push(...page.turns);cursor=page.nextCursor;}while(cursor&&turns.length<400);return turns.reverse().map((t,i)=>{const user=t.messages.filter(m=>m.role==='user').map(m=>m.text).join('\n');const answer=t.messages.filter(m=>m.role==='assistant').map(m=>m.text).join('\n');return{id:t.id,question:user,answer,status:'已完成',time:`Turn ${i+1}`,messages:t.messages,tools:t.tools||[]};});}
 function updateComposer(){
   const visible=state.mode==='real'&&!!state.selectedThreadId;
@@ -100,9 +147,11 @@ function updateComposer(){
   if(!visible)return;
   const thread=state.catalog.find(t=>t.id===state.selectedThreadId);
   $('composer-target').textContent=`继续：${titleFor(thread||{id:state.selectedThreadId})}`;
-  $('composer-status').textContent=state.run?.threadId===state.selectedThreadId?'正在生成…':'消息会接在此会话末尾';
+  $('composer-status').textContent=state.run?.threadId===state.selectedThreadId?'正在生成…':state.run?'另一条会话正在生成…':'消息会接在此会话末尾';
   $('send-turn').disabled=!!state.run;
-  $('stop-turn').hidden=!state.run;
+  $('stop-turn').hidden=!state.run||state.run.threadId!==state.selectedThreadId;
+  $('live-answer').hidden=!state.run||state.run.threadId!==state.selectedThreadId||!state.run.live.answer||state.run.live.answer==='正在生成…';
+  if(!$('live-answer').hidden)$('live-answer').textContent=state.run.live.answer;
 }
 async function refreshCatalog(){
   const result=await call('list_conversations',{limit:100});
@@ -113,9 +162,17 @@ async function forkTurn(threadId,turnId){
   if(button)button.disabled=true;
   try{
     const result=await call('fork_conversation_at_turn',{threadId,turnId});
-    if(result.saveError)toast(`分支已创建，但定位记录保存失败：${result.saveError}`);
-    await refreshCatalog();await showReal(result.fork.id);
-    state.expanded.add(result.fork.id);draw();toast('真实分支已创建，现可在下方继续对话');
+    try{await refreshCatalog();}catch(error){toast(`分支已创建，会话列表刷新失败：${error.message}`);}
+    state.branches[result.fork.id]={parentThreadId:threadId,sourceTurnId:turnId};
+    const child=state.catalog.find(t=>t.id===result.fork.id);
+    if(child)child.forkedFromId=threadId;
+    else state.catalog.push({...result.fork,forkedFromId:threadId});
+    await showReal(result.fork.id);
+    state.expanded.add(result.fork.id);draw();saveView();
+    if(result.saveError){
+      $('canvas-meta').textContent+=' · 分支定位未保存，重启后可能无法归位';
+      toast(`分支已创建，但定位记录保存失败：${result.saveError}`);
+    }else toast('真实分支已创建，现可在下方继续对话');
   }catch(error){toast(`创建分支失败：${error.message}`);}
   finally{if(button)button.disabled=false;}
 }
@@ -145,23 +202,48 @@ async function pollActivity(){
     for(const event of result.events){
       if(event.method==='item/agentMessage/delta'){
         const delta=event.params.delta||'';
-        $('live-answer').hidden=false;$('live-answer').textContent+=delta;
         if(run.live){
-          run.live.answer=run.live.answer==='正在生成…'?delta:run.live.answer+delta;
+          run.message=appendAgentDelta(run.message,event.params.itemId,delta);
+          run.live.answer=run.message.text;
           run.live.messages[1]={role:'assistant',text:run.live.answer};
-          if(state.selected?.id===run.live.id) selectTurn(run.live,threadById(run.threadId));
-          else draw();
+          if(state.mode==='real'&&state.selectedThreadId===run.threadId){
+            $('live-answer').hidden=false;$('live-answer').textContent=run.live.answer;
+          }
+          if(state.mode==='real'&&threadById(run.threadId)){
+            if(state.selected?.id===run.live.id)selectTurn(run.live,threadById(run.threadId),{reframe:false});
+            else draw();
+          }
         }
       }
     }
-    renderApproval(result.pending||[]);
+    if(state.mode==='real'&&state.selectedThreadId===run.threadId)renderApproval(result.pending||[]);
+    else renderApproval([]);
     if(result.status!=='inProgress'&&result.status!=='unknown'){
-      state.run=null;updateComposer();$('composer-status').textContent=result.status==='completed'?'已完成':`已结束：${result.status}`;
+      state.run=null;updateComposer();
+      if(state.mode==='real'&&state.selectedThreadId===run.threadId)$('composer-status').textContent=result.status==='completed'?'已完成':`已结束：${result.status}`;
       if(result.status!=='completed')toast(`本轮状态：${result.status}`);
-      await refreshCatalog();await showReal(run.threadId);
-      const updatedThread=threadById(run.threadId);
-      const finalTurn=updatedThread?.turns.at(-1);
-      if(finalTurn) selectTurn(finalTurn,updatedThread);
+      let finalTurns;
+      try{finalTurns=await readTurns(run.threadId);}catch(error){toast(`本轮已结束，但读取最终回答失败：${error.message}`);}
+      try{await refreshCatalog();}catch(error){toast(`会话列表刷新失败：${error.message}`);}
+      if(state.mode==='real'&&state.source?.root===rootOf(run.threadId)){
+        const updatedThread=threadById(run.threadId);
+        if(updatedThread){
+          if(finalTurns){
+            updatedThread.allTurns=finalTurns;
+            const parent=threadById(updatedThread.parentId);
+            updatedThread.turns=parent?projectForkTurns(parent.allTurns||parent.turns,finalTurns,updatedThread.anchorId).turns:finalTurns;
+          }
+          let finalTurn=updatedThread.turns.find(t=>t.id===run.turnId);
+          if(!finalTurn){
+            run.live.status=result.status==='completed'?'已完成':`已结束：${result.status}`;
+            updatedThread.turns.push(run.live);finalTurn=run.live;
+          }
+          if(finalTurn===run.live)finalTurn.status=result.status==='completed'?'已完成':`已结束：${result.status}`;
+          if(state.selected?.id===run.live.id&&finalTurn)selectTurn(finalTurn,updatedThread,{reframe:false});
+          else draw();
+        }
+      }
+      $('live-answer').hidden=true;
       return;
     }
   }catch(error){$('composer-status').textContent=`状态读取失败：${error.message}`;}
@@ -183,6 +265,7 @@ async function sendTurn(){
   }catch(error){$('composer-status').textContent=`发送失败：${error.message}`;$('send-turn').disabled=false;}
 }
 async function showReal(id){
+  saveView();resetTreeSearch();
   const request=++state.request;state.mode='real';state.selectedThreadId=id;
   const sessionId=rootOf(id),family=state.catalog.filter(t=>rootOf(t.id)===sessionId);
   const root=family.some(t=>t.id===sessionId)?sessionId:id;
@@ -191,7 +274,7 @@ async function showReal(id){
   const byId=new Map(state.catalog.map(t=>[t.id,t]));let path=byId.get(id),visited=new Set();
   while(path&&path.id!==root&&!visited.has(path.id)){visited.add(path.id);state.expanded.add(path.id);path=byId.get(path.forkedFromId);}
   renderCatalog();updateComposer();
-  configureCanvas(titleFor(rootThread||{id:root}),'正在读取真实会话…');
+  configureCanvas(titleFor(rootThread||{id:root}),'正在读取真实会话…',{reframe:false});
   $('empty').hidden=false;$('empty').textContent='正在读取会话历史…';
   try{
     const data=await Promise.all(family.map(async t=>({id:t.id,name:titleFor(t),parentId:t.forkedFromId,allTurns:await readTurns(t.id),turns:[]})));
@@ -207,13 +290,15 @@ async function showReal(id){
       if(!thread.anchorId)unresolved++;
     }
     state.source={root,threads:data};save('tree-selection',id);renderCatalog();
-    configureCanvas(titleFor(rootThread||{id:root}),`${data.length} 个关联会话 · ${data.find(t=>t.id===root)?.turns.length||0} 个主线 Turn${unresolved?` · ${unresolved} 条分支锚点未知`:''}`);
+    const restored=restoreTreeView(saved(treeViewStorageKey(root)),state.source);
+    if(restored){state.expanded=new Set([...restored.expanded,...state.expanded]);state.scale=restored.scale;state.panX=restored.panX;state.panY=restored.panY;}
+    configureCanvas(titleFor(rootThread||{id:root}),`${data.length} 个关联会话 · ${data.find(t=>t.id===root)?.turns.length||0} 个主线 Turn${unresolved?` · ${unresolved} 条分支锚点未知`:''}`,{reframe:!restored});
     updateComposer();if(unresolved)toast('部分分支来源未知，仍可从左侧选择会话');
   }catch(error){if(request!==state.request)return;$('empty').hidden=false;$('empty').textContent=`读取失败：${error.message}`;toast('真实会话读取失败');}
 }
-function setup(){ $('show-demo').onclick=showDemo;$('show-real').onclick=()=>{const first=state.catalog.find(t=>!t.forkedFromId)||state.catalog[0];if(first)showReal(first.id);else toast('没有可读取的本地会话');};$('session-search').oninput=renderCatalog;$('close-detail').onclick=()=>{$('shell').classList.remove('has-detail');state.selected=null;draw();requestAnimationFrame(readableView);};$('collapse-all').onclick=()=>{state.expanded.clear();draw();fit();};$('expand-all').onclick=()=>{state.expanded=new Set(state.source?.threads.filter(t=>t.id!==state.source.root).map(t=>t.id)||[]);draw();fit();};$('zoom-in').onclick=()=>setZoom(state.scale*1.2);$('zoom-out').onclick=()=>setZoom(state.scale/1.2);$('fit-view').onclick=fit;
+function setup(){ installTreeSearch();$('show-demo').onclick=showDemo;$('show-real').onclick=()=>{const first=state.catalog.find(t=>!t.forkedFromId)||state.catalog[0];if(first)showReal(first.id);else toast('没有可读取的本地会话');};$('session-search').oninput=renderCatalog;$('close-detail').onclick=()=>{$('shell').classList.remove('has-detail');state.selected=null;draw();};$('collapse-all').onclick=()=>{state.expanded.clear();draw();fit();};$('expand-all').onclick=()=>{state.expanded=new Set(state.source?.threads.filter(t=>t.id!==state.source.root).map(t=>t.id)||[]);draw();fit();};$('zoom-in').onclick=()=>setZoom(state.scale*1.2);$('zoom-out').onclick=()=>setZoom(state.scale/1.2);$('fit-view').onclick=fit;
   $('composer-form').onsubmit=e=>{e.preventDefault();sendTurn();};
   $('stop-turn').onclick=async()=>{const run=state.run;if(!run)return;try{await call('interrupt_turn',{threadId:run.threadId,turnId:run.turnId});$('composer-status').textContent='正在停止…';}catch(error){toast(error.message);}};
-  const view=$('viewport');view.addEventListener('contextmenu',e=>e.preventDefault());view.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;state.dragging={x:e.clientX,y:e.clientY,px:state.panX,py:state.panY};view.setPointerCapture(e.pointerId);view.classList.add('dragging');});view.addEventListener('pointermove',e=>{if(!state.dragging)return;state.panX=state.dragging.px+e.clientX-state.dragging.x;state.panY=state.dragging.py+e.clientY-state.dragging.y;applyTransform();});view.addEventListener('pointerup',()=>{state.dragging=null;view.classList.remove('dragging');});view.addEventListener('pointercancel',()=>{state.dragging=null;view.classList.remove('dragging');});view.addEventListener('wheel',e=>{e.preventDefault();const r=view.getBoundingClientRect();setZoom(state.scale*(e.deltaY>0?.9:1.1),{x:e.clientX-r.left,y:e.clientY-r.top});},{passive:false});window.addEventListener('resize',()=>{if(state.source)fit();});}
+  const view=$('viewport');view.addEventListener('contextmenu',e=>e.preventDefault());view.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;state.dragging={x:e.clientX,y:e.clientY,px:state.panX,py:state.panY};view.setPointerCapture(e.pointerId);view.classList.add('dragging');});view.addEventListener('pointermove',e=>{if(!state.dragging)return;state.panX=state.dragging.px+e.clientX-state.dragging.x;state.panY=state.dragging.py+e.clientY-state.dragging.y;applyTransform();});view.addEventListener('pointerup',()=>{state.dragging=null;view.classList.remove('dragging');saveView();});view.addEventListener('pointercancel',()=>{state.dragging=null;view.classList.remove('dragging');saveView();});view.addEventListener('wheel',e=>{e.preventDefault();const r=view.getBoundingClientRect();setZoom(state.scale*(e.deltaY>0?.9:1.1),{x:e.clientX-r.left,y:e.clientY-r.top});},{passive:false});window.addEventListener('resize',()=>{if(state.source)fit();});}
 async function start(){setup();showDemo();if(new URLSearchParams(location.search).has('preview'))return;try{await app.connect();await refreshCatalog();const previous=saved('tree-selection');if(previous&&previous!=='demo'&&state.catalog.some(t=>t.id===previous))await showReal(previous);}catch(error){$('sidebar-footer').textContent='本地会话暂时不可用';toast(error.message);}}
 await start();
